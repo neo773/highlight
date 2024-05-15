@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openlyinc/pointy"
+
 	"github.com/highlight-run/highlight/backend/parser/listener"
 
 	"github.com/highlight/highlight/sdk/highlight-go"
@@ -17,9 +19,7 @@ import (
 	"github.com/huandu/go-sqlbuilder"
 	e "github.com/pkg/errors"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/samber/lo"
 
 	modelInputs "github.com/highlight-run/highlight/backend/private-graph/graph/model"
 	"github.com/highlight-run/highlight/backend/util"
@@ -29,7 +29,6 @@ const TracesTable = "traces"
 const TracesSamplingTable = "traces_sampling"
 const TraceKeysTable = "trace_keys"
 const TraceKeyValuesTable = "trace_key_values"
-const TraceMetricsTable = "trace_metrics"
 const TracesByIdTable = "traces_by_id"
 
 var traceKeysToColumns = map[modelInputs.ReservedTraceKey]string{
@@ -43,9 +42,12 @@ var traceKeysToColumns = map[modelInputs.ReservedTraceKey]string{
 	modelInputs.ReservedTraceKeyDuration:        "Duration",
 	modelInputs.ReservedTraceKeyServiceName:     "ServiceName",
 	modelInputs.ReservedTraceKeyServiceVersion:  "ServiceVersion",
-	modelInputs.ReservedTraceKeyMetric:          "Events.Attributes[1]['metric.name']",
+	modelInputs.ReservedTraceKeyMetricName:      "MetricName",
+	modelInputs.ReservedTraceKeyMetricValue:     "MetricValue",
 	modelInputs.ReservedTraceKeyEnvironment:     "Environment",
 	modelInputs.ReservedTraceKeyHasErrors:       "HasErrors",
+	modelInputs.ReservedTraceKeyTimestamp:       "Timestamp",
+	modelInputs.ReservedTraceKeyHighlightType:   "HighlightType",
 }
 
 var traceColumns = []string{
@@ -95,7 +97,7 @@ var TracesTableConfig = model.TableConfig[modelInputs.ReservedTraceKey]{
 	BodyColumn:       TracesTableNoDefaultConfig.BodyColumn,
 	AttributesColumn: TracesTableNoDefaultConfig.AttributesColumn,
 	SelectColumns:    TracesTableNoDefaultConfig.SelectColumns,
-	DefaultFilter:    fmt.Sprintf("%s!=%s %s!=%s", modelInputs.ReservedTraceKeySpanName, highlight.MetricSpanName, highlight.TraceTypeAttribute, highlight.TraceTypeHighlightInternal),
+	DefaultFilter:    fmt.Sprintf("%s!=%s %s!=%s", modelInputs.ReservedTraceKeySpanName, highlight.MetricSpanName, modelInputs.ReservedTraceKeyHighlightType, highlight.TraceTypeHighlightInternal),
 }
 
 var tracesSamplingTableConfig = model.TableConfig[modelInputs.ReservedTraceKey]{
@@ -105,7 +107,7 @@ var tracesSamplingTableConfig = model.TableConfig[modelInputs.ReservedTraceKey]{
 	ReservedKeys:     modelInputs.AllReservedTraceKey,
 	AttributesColumn: "TraceAttributes",
 	SelectColumns:    traceColumns,
-	DefaultFilter:    fmt.Sprintf("%s!=%s %s!=%s", modelInputs.ReservedTraceKeySpanName, highlight.MetricSpanName, highlight.TraceTypeAttribute, highlight.TraceTypeHighlightInternal),
+	DefaultFilter:    fmt.Sprintf("%s!=%s %s!=%s", modelInputs.ReservedTraceKeySpanName, highlight.MetricSpanName, modelInputs.ReservedTraceKeyHighlightType, highlight.TraceTypeHighlightInternal),
 }
 
 var tracesSampleableTableConfig = sampleableTableConfig[modelInputs.ReservedTraceKey]{
@@ -135,54 +137,55 @@ type ClickhouseTraceRow struct {
 	StatusMessage    string
 	Environment      string
 	HasErrors        bool
-	EventsTimestamp  clickhouse.ArraySet `ch:"Events.Timestamp"`
-	EventsName       clickhouse.ArraySet `ch:"Events.Name"`
-	EventsAttributes clickhouse.ArraySet `ch:"Events.Attributes"`
-	LinksTraceId     clickhouse.ArraySet `ch:"Links.TraceId"`
-	LinksSpanId      clickhouse.ArraySet `ch:"Links.SpanId"`
-	LinksTraceState  clickhouse.ArraySet `ch:"Links.TraceState"`
-	LinksAttributes  clickhouse.ArraySet `ch:"Links.Attributes"`
+	EventsTimestamp  []time.Time         `json:"Events.Timestamp" ch:"Events.Timestamp"`
+	EventsName       []string            `json:"Events.Name" ch:"Events.Name"`
+	EventsAttributes []map[string]string `json:"Events.Attributes" ch:"Events.Attributes"`
+	LinksTraceId     []string            `json:"Links.TraceId" ch:"Links.TraceId"`
+	LinksSpanId      []string            `json:"Links.SpanId" ch:"Links.SpanId"`
+	LinksTraceState  []string            `json:"Links.TraceState" ch:"Links.TraceState"`
+	LinksAttributes  []map[string]string `json:"Links.Attributes" ch:"Links.Attributes"`
 }
 
-func (client *Client) BatchWriteTraceRows(ctx context.Context, traceRows []*TraceRow) error {
+func ConvertTraceRow(traceRow *TraceRow) *ClickhouseTraceRow {
+	traceTimes, traceNames, traceAttrs := convertEvents(traceRow)
+	linkTraceIds, linkSpanIds, linkStates, linkAttrs := convertLinks(traceRow)
+
+	return &ClickhouseTraceRow{
+		Timestamp:        traceRow.Timestamp,
+		UUID:             traceRow.UUID,
+		TraceId:          traceRow.TraceId,
+		SpanId:           traceRow.SpanId,
+		ParentSpanId:     traceRow.ParentSpanId,
+		ProjectId:        traceRow.ProjectId,
+		SecureSessionId:  traceRow.SecureSessionId,
+		TraceState:       traceRow.TraceState,
+		SpanName:         traceRow.SpanName,
+		SpanKind:         traceRow.SpanKind,
+		Duration:         traceRow.Duration,
+		ServiceName:      traceRow.ServiceName,
+		ServiceVersion:   traceRow.ServiceVersion,
+		TraceAttributes:  traceRow.TraceAttributes,
+		StatusCode:       traceRow.StatusCode,
+		StatusMessage:    traceRow.StatusMessage,
+		Environment:      traceRow.Environment,
+		HasErrors:        traceRow.HasErrors,
+		EventsTimestamp:  traceTimes,
+		EventsName:       traceNames,
+		EventsAttributes: traceAttrs,
+		LinksTraceId:     linkTraceIds,
+		LinksSpanId:      linkSpanIds,
+		LinksTraceState:  linkStates,
+		LinksAttributes:  linkAttrs,
+	}
+}
+
+func (client *Client) BatchWriteTraceRows(ctx context.Context, traceRows []*ClickhouseTraceRow) error {
 	if len(traceRows) == 0 {
 		return nil
 	}
 
 	span, _ := util.StartSpanFromContext(ctx, util.KafkaBatchWorkerOp, util.ResourceName("worker.kafka.batched.flushTraces.prepareRows"))
 	span.SetAttribute("BatchSize", len(traceRows))
-	rows := lo.Map(traceRows, func(traceRow *TraceRow, _ int) *ClickhouseTraceRow {
-		traceTimes, traceNames, traceAttrs := convertEvents(traceRow)
-		linkTraceIds, linkSpanIds, linkStates, linkAttrs := convertLinks(traceRow)
-
-		return &ClickhouseTraceRow{
-			Timestamp:        traceRow.Timestamp,
-			UUID:             traceRow.UUID,
-			TraceId:          traceRow.TraceId,
-			SpanId:           traceRow.SpanId,
-			ParentSpanId:     traceRow.ParentSpanId,
-			ProjectId:        traceRow.ProjectId,
-			SecureSessionId:  traceRow.SecureSessionId,
-			TraceState:       traceRow.TraceState,
-			SpanName:         traceRow.SpanName,
-			SpanKind:         traceRow.SpanKind,
-			Duration:         traceRow.Duration,
-			ServiceName:      traceRow.ServiceName,
-			ServiceVersion:   traceRow.ServiceVersion,
-			TraceAttributes:  traceRow.TraceAttributes,
-			StatusCode:       traceRow.StatusCode,
-			StatusMessage:    traceRow.StatusMessage,
-			Environment:      traceRow.Environment,
-			HasErrors:        traceRow.HasErrors,
-			EventsTimestamp:  traceTimes,
-			EventsName:       traceNames,
-			EventsAttributes: traceAttrs,
-			LinksTraceId:     linkTraceIds,
-			LinksSpanId:      linkSpanIds,
-			LinksTraceState:  linkStates,
-			LinksAttributes:  linkAttrs,
-		}
-	})
 
 	batch, err := client.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s", TracesTable))
 	if err != nil {
@@ -190,7 +193,7 @@ func (client *Client) BatchWriteTraceRows(ctx context.Context, traceRows []*Trac
 		return e.Wrap(err, "failed to create traces batch")
 	}
 
-	for _, traceRow := range rows {
+	for _, traceRow := range traceRows {
 		err = batch.AppendStruct(traceRow)
 		if err != nil {
 			span.Finish(err)
@@ -202,11 +205,11 @@ func (client *Client) BatchWriteTraceRows(ctx context.Context, traceRows []*Trac
 	return batch.Send()
 }
 
-func convertEvents(traceRow *TraceRow) (clickhouse.ArraySet, clickhouse.ArraySet, clickhouse.ArraySet) {
+func convertEvents(traceRow *TraceRow) ([]time.Time, []string, []map[string]string) {
 	var (
-		times clickhouse.ArraySet
-		names clickhouse.ArraySet
-		attrs clickhouse.ArraySet
+		times []time.Time
+		names []string
+		attrs []map[string]string
 	)
 
 	events := traceRow.Events
@@ -218,13 +221,14 @@ func convertEvents(traceRow *TraceRow) (clickhouse.ArraySet, clickhouse.ArraySet
 	return times, names, attrs
 }
 
-func convertLinks(traceRow *TraceRow) (clickhouse.ArraySet, clickhouse.ArraySet, clickhouse.ArraySet, clickhouse.ArraySet) {
+func convertLinks(traceRow *TraceRow) ([]string, []string, []string, []map[string]string) {
 	var (
-		traceIDs clickhouse.ArraySet
-		spanIDs  clickhouse.ArraySet
-		states   clickhouse.ArraySet
-		attrs    clickhouse.ArraySet
+		traceIDs []string
+		spanIDs  []string
+		states   []string
+		attrs    []map[string]string
 	)
+
 	links := traceRow.Links
 	for _, link := range links {
 		traceIDs = append(traceIDs, link.TraceId)
@@ -266,7 +270,7 @@ func (client *Client) ReadTraces(ctx context.Context, projectID int, params mode
 		}, nil
 	}
 
-	conn, err := readObjects(ctx, client, TracesTableConfig, projectID, params, pagination, scanTrace)
+	conn, err := readObjects(ctx, client, TracesTableConfig, tracesSamplingTableConfig, projectID, params, pagination, scanTrace)
 	if err != nil {
 		return nil, err
 	}
@@ -322,26 +326,7 @@ func (client *Client) ExistingTraceIds(ctx context.Context, projectID int, trace
 	return existingTraceIds, rows.Err()
 }
 
-func (client *Client) ReadTrace(ctx context.Context, projectID int, traceID string) ([]*modelInputs.Trace, error) {
-	sb := sqlbuilder.NewSelectBuilder()
-	var err error
-	var args []interface{}
-
-	sb.From(TracesByIdTable).
-		Select("Timestamp, UUID, TraceId, SpanId, ParentSpanId, ProjectId, SecureSessionId, TraceState, SpanName, SpanKind, Duration, ServiceName, ServiceVersion, Environment, HasErrors, TraceAttributes, StatusCode, StatusMessage").
-		Where(sb.Equal("ProjectId", projectID)).
-		Where(sb.Equal("TraceId", traceID))
-
-	sql, args := sb.BuildWithFlavor(sqlbuilder.ClickHouse)
-
-	span, _ := util.StartSpanFromContext(ctx, "traces", util.ResourceName("ReadTrace"))
-
-	rows, err := client.conn.Query(ctx, sql, args...)
-	if err != nil {
-		span.Finish(err)
-		return nil, err
-	}
-
+func getTracesFromRows(rows driver.Rows) ([]*modelInputs.Trace, error) {
 	var seenUUIDs = map[string]struct{}{}
 	var traces []*modelInputs.Trace
 	for rows.Next() {
@@ -379,17 +364,83 @@ func (client *Client) ReadTrace(ctx context.Context, projectID int, traceID stri
 
 	// Order by timestamp
 	// Doing this in code rather than Clickhouse so Clickhouse will use the `traceId` projection
-	slices.SortFunc(traces, func(a *modelInputs.Trace, b *modelInputs.Trace) bool {
-		return a.Timestamp.Before(b.Timestamp)
+	slices.SortFunc(traces, func(a *modelInputs.Trace, b *modelInputs.Trace) int {
+		return a.Timestamp.Compare(b.Timestamp)
 	})
 
-	span.Finish(rows.Err())
+	if rows.Err() != nil {
+		return nil, rows.Err()
+	}
 
-	return traces, rows.Err()
+	return traces, nil
+}
+
+func (client *Client) ReadTrace(ctx context.Context, projectID int, traceID string) ([]*modelInputs.Trace, error) {
+	sb := sqlbuilder.NewSelectBuilder()
+	var err error
+	var args []interface{}
+
+	sb.From(TracesByIdTable).
+		Select("Timestamp, UUID, TraceId, SpanId, ParentSpanId, ProjectId, SecureSessionId, TraceState, SpanName, SpanKind, Duration, ServiceName, ServiceVersion, Environment, HasErrors, TraceAttributes, StatusCode, StatusMessage").
+		Where(sb.Equal("ProjectId", projectID)).
+		Where(sb.Equal("TraceId", traceID))
+
+	sql, args := sb.BuildWithFlavor(sqlbuilder.ClickHouse)
+
+	span, _ := util.StartSpanFromContext(ctx, "traces", util.ResourceName("ReadTrace"))
+
+	rows, err := client.conn.Query(ctx, sql, args...)
+	if err != nil {
+		span.Finish(err)
+		return nil, err
+	}
+
+	traces, err := getTracesFromRows(rows)
+	if err != nil {
+		span.Finish(err)
+		return nil, err
+	}
+
+	span.Finish()
+
+	if len(traces) > 0 {
+		return traces, nil
+	}
+
+	span, _ = util.StartSpanFromContext(ctx, "traces", util.ResourceName("ReadTraceFallback"))
+
+	sb.From(TracesTable).
+		Select("Timestamp, UUID, TraceId, SpanId, ParentSpanId, ProjectId, SecureSessionId, TraceState, SpanName, SpanKind, Duration, ServiceName, ServiceVersion, Environment, HasErrors, TraceAttributes, StatusCode, StatusMessage").
+		Where(sb.Equal("ProjectId", projectID)).
+		Where(sb.Equal("TraceId", traceID)).
+		Where(sb.GE("Timestamp", time.Now().Add(-5*time.Minute))).
+		Where(sb.LE("Timestamp", time.Now()))
+
+	sql, args = sb.BuildWithFlavor(sqlbuilder.ClickHouse)
+
+	rows, err = client.conn.Query(ctx, sql, args...)
+	if err != nil {
+		span.Finish(err)
+		return nil, err
+	}
+
+	traces, err = getTracesFromRows(rows)
+	if err != nil {
+		span.Finish(err)
+		return nil, err
+	}
+
+	span.Finish()
+	return traces, nil
 }
 
 func (client *Client) ReadTracesMetrics(ctx context.Context, projectID int, params modelInputs.QueryInput, column string, metricTypes []modelInputs.MetricAggregator, groupBy []string, nBuckets *int, bucketBy string, limit *int, limitAggregator *modelInputs.MetricAggregator, limitColumn *string) (*modelInputs.MetricsBuckets, error) {
 	return readMetrics(ctx, client, tracesSampleableTableConfig, projectID, params, column, metricTypes, groupBy, nBuckets, bucketBy, limit, limitAggregator, limitColumn)
+}
+
+func (client *Client) ReadWorkspaceTraceCounts(ctx context.Context, projectIDs []int, params modelInputs.QueryInput) (*modelInputs.MetricsBuckets, error) {
+	// 12 buckets - 12 months in a year, or 12 weeks in a quarter
+	return readWorkspaceMetrics(ctx, client, tracesSampleableTableConfig, projectIDs, params, "", []modelInputs.MetricAggregator{modelInputs.MetricAggregatorCount}, nil, pointy.Int(12), modelInputs.MetricBucketByTimestamp.String(), nil, nil, nil)
 }
 
 func (client *Client) TracesKeys(ctx context.Context, projectID int, startDate time.Time, endDate time.Time, query *string, typeArg *modelInputs.KeyType) ([]*modelInputs.QueryKey, error) {
@@ -401,8 +452,9 @@ func (client *Client) TracesKeys(ctx context.Context, projectID int, startDate t
 	if query == nil || *query == "" {
 		traceKeys = append(traceKeys, defaultTraceKeys...)
 	} else {
+		queryLower := strings.ToLower(*query)
 		for _, key := range defaultTraceKeys {
-			if strings.Contains(key.Name, *query) {
+			if strings.Contains(key.Name, queryLower) {
 				traceKeys = append(traceKeys, key)
 			}
 		}
@@ -415,10 +467,10 @@ func (client *Client) TracesKeyValues(ctx context.Context, projectID int, keyNam
 	return KeyValuesAggregated(ctx, client, TraceKeyValuesTable, projectID, keyName, startDate, endDate)
 }
 
-func (client *Client) TracesMetrics(ctx context.Context, projectID int, startDate time.Time, endDate time.Time, query *string) ([]*modelInputs.QueryKey, error) {
-	return KeysAggregated(ctx, client, TraceMetricsTable, projectID, startDate, endDate, query, nil)
+func TraceMatchesQuery(trace *TraceRow, filters listener.Filters) bool {
+	return matchesQuery(trace, TracesTableConfig, filters, listener.OperatorAnd)
 }
 
-func TraceMatchesQuery(trace *TraceRow, filters listener.Filters) bool {
-	return matchesQuery(trace, TracesTableConfig, filters)
+func (client *Client) TracesLogLines(ctx context.Context, projectID int, params modelInputs.QueryInput) ([]*modelInputs.LogLine, error) {
+	return logLines(ctx, client, TracesTableConfig, projectID, params)
 }

@@ -11,7 +11,6 @@ import {
 	IconSolidGoogle,
 	Stack,
 	Text,
-	useFormStore,
 } from '@highlight-run/ui/components'
 import SvgHighlightLogoOnLight from '@icons/HighlightLogoOnLight'
 import { AuthBody, AuthError, AuthFooter, AuthHeader } from '@pages/Auth/Layout'
@@ -28,6 +27,7 @@ import {
 	useAppLoadingContext,
 } from '@/context/AppLoadingContext'
 import { SIGN_UP_ROUTE } from '@/pages/Auth/AuthRouter'
+import { VERIFY_EMAIL_ROUTE } from '@/routers/AppRouter/AppRouter'
 import analytics from '@/util/analytics'
 
 type Props = {
@@ -46,7 +46,7 @@ export const SignIn: React.FC<Props> = ({ setResolver }) => {
 	const location = useLocation()
 
 	const initialEmail: string = location.state?.email ?? ''
-	const formStore = useFormStore({
+	const formStore = Form.useStore({
 		defaultValues: {
 			email: initialEmail,
 			password: '',
@@ -76,9 +76,11 @@ export const SignIn: React.FC<Props> = ({ setResolver }) => {
 
 	const handleAuth = useCallback(
 		async ({ additionalUserInfo, user }: firebase.auth.UserCredential) => {
-			if (additionalUserInfo?.isNewUser && user?.email) {
+			const isNewUser = additionalUserInfo?.isNewUser && user?.email
+
+			if (isNewUser) {
 				analytics.track('Sign up', {
-					email: user.email,
+					email: user.email!,
 					provider: additionalUserInfo.providerId,
 				})
 
@@ -91,8 +93,12 @@ export const SignIn: React.FC<Props> = ({ setResolver }) => {
 
 			await fetchAdmin()
 			signIn(user)
+
+			if (isNewUser) {
+				navigate(VERIFY_EMAIL_ROUTE, { replace: true })
+			}
 		},
-		[createAdmin, fetchAdmin, signIn],
+		[createAdmin, fetchAdmin, signIn, navigate],
 	)
 
 	const handleAuthError = useCallback(

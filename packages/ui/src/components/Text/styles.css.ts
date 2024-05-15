@@ -1,8 +1,9 @@
-import { RecipeVariants, recipe } from '@vanilla-extract/recipes'
 import { createStyleObject } from '@capsizecss/core'
-import fontMetrics from '@capsizecss/metrics/inter'
 import plexoFontMetrics from '@capsizecss/metrics/iBMPlexMono'
+import fontMetrics from '@capsizecss/metrics/inter'
 import { globalStyle } from '@vanilla-extract/css'
+import { recipe, RecipeVariants } from '@vanilla-extract/recipes'
+
 import { themeVars } from '../../css/theme.css'
 
 // Body
@@ -72,10 +73,16 @@ const size = {
 	large: large,
 } as const
 
+export const fontWeights = {
+	regular: '400',
+	medium: '500',
+	bold: '600',
+} as const
+
 const weight = {
-	regular: { fontWeight: '400' },
-	medium: { fontWeight: '500' },
-	bold: { fontWeight: '600' },
+	regular: { fontWeight: fontWeights.regular },
+	medium: { fontWeight: fontWeights.medium },
+	bold: { fontWeight: fontWeights.bold },
 } as const
 
 export const typographyStyles = {

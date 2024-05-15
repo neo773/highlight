@@ -2,6 +2,7 @@ package hlog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 const TimestampFormat = "2006-01-02T15:04:05.000Z"
 const TimestampFormatNano = "2006-01-02T15:04:05.999999999Z"
 const LogAttributeValueLengthLimit = 2 << 15
+const MaxLogAttributesDepth uint8 = 255
 
 type PinoLog struct {
 	Level    uint8  `json:"level"`
@@ -64,6 +66,7 @@ type VercelLog struct {
 	Host         string `json:"host"`
 
 	Type       string `json:"type"`
+	Level      string `json:"level"`
 	Entrypoint string `json:"entrypoint"`
 
 	RequestId   string      `json:"requestId"`
@@ -73,17 +76,33 @@ type VercelLog struct {
 	Proxy       VercelProxy `json:"proxy"`
 }
 
-func submitVercelLog(ctx context.Context, projectID int, log VercelLog) {
+var reservedVercelLogAttributes = map[string]bool{
+	"vercel.timestamp": true, "vercel.proxy.timestamp": true, "vercel.message": true,
+}
+
+func submitVercelLog(ctx context.Context, tracer trace.Tracer, projectID int, serviceName string, log VercelLog) {
+	ctx = context.WithValue(ctx, highlight.ContextKeys.SessionSecureID, log.RequestId)
+	ctx = context.WithValue(ctx, highlight.ContextKeys.RequestID, log.RequestId)
 	span, _ := highlight.StartTraceWithoutResourceAttributes(
-		ctx, highlight.UtilitySpanName, []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindClient)},
-		attribute.String(highlight.ProjectIDAttribute, strconv.Itoa(projectID)),
+		ctx, tracer, highlight.UtilitySpanName, []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindClient)},
+		attribute.String(highlight.ProjectIDAttribute, strconv.Itoa(projectID)), semconv.ServiceNameKey.String(serviceName),
 	)
 	defer highlight.EndTrace(span)
 
+	var level string
+	if log.Type == "stdout" {
+		level = "INFO"
+	} else if log.Type == "stderr" {
+		level = "ERROR"
+	} else if log.Level == "warning" {
+		level = "WARN"
+	} else {
+		level = strings.ToUpper(log.Level)
+	}
+
 	attrs := []attribute.KeyValue{
-		LogSeverityKey.String(log.Type),
+		LogSeverityKey.String(level),
 		LogMessageKey.String(log.Message),
-		semconv.ServiceNameKey.String("vercel-log-drain-" + log.ProjectId),
 		semconv.ServiceVersionKey.String(log.DeploymentId),
 		semconv.CodeNamespaceKey.String(log.Source),
 		semconv.CodeFilepathKey.String(log.Path),
@@ -103,25 +122,36 @@ func submitVercelLog(ctx context.Context, projectID int, log VercelLog) {
 		attrs = append(attrs, semconv.HTTPUserAgentKey.String(strings.Join(log.Proxy.UserAgent, ",")))
 	}
 
+	if bytes, err := json.Marshal(&log); err == nil {
+		logMap := map[string]interface{}{}
+		if err := json.Unmarshal(bytes, &logMap); err == nil {
+			for k, v := range FormatLogAttributes("vercel", logMap) {
+				if !reservedVercelLogAttributes[k] && v != "" {
+					attrs = append(attrs, attribute.String(k, v))
+				}
+			}
+		}
+	}
+
 	span.AddEvent(highlight.LogEvent, trace.WithAttributes(attrs...), trace.WithTimestamp(time.UnixMilli(log.Timestamp)))
 	if log.Type == "error" {
 		span.SetStatus(codes.Error, log.Message)
 	}
 }
 
-func SubmitVercelLogs(ctx context.Context, projectID int, logs []VercelLog) {
+func SubmitVercelLogs(ctx context.Context, tracer trace.Tracer, projectID int, serviceName string, logs []VercelLog) {
 	if len(logs) == 0 {
 		return
 	}
 
 	for _, log := range logs {
-		submitVercelLog(ctx, projectID, log)
+		submitVercelLog(ctx, tracer, projectID, serviceName, log)
 	}
 }
 
-func SubmitHTTPLog(ctx context.Context, projectID int, lg Log) error {
+func SubmitHTTPLog(ctx context.Context, tracer trace.Tracer, projectID int, lg Log) error {
 	span, _ := highlight.StartTraceWithoutResourceAttributes(
-		ctx, highlight.UtilitySpanName, []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindClient)},
+		ctx, tracer, highlight.UtilitySpanName, []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindClient)},
 		attribute.String(highlight.ProjectIDAttribute, strconv.Itoa(projectID)),
 	)
 	defer highlight.EndTrace(span)
@@ -150,7 +180,10 @@ func SubmitHTTPLog(ctx context.Context, projectID int, lg Log) error {
 	return nil
 }
 
-func FormatLogAttributes(ctx context.Context, k string, v interface{}) map[string]string {
+func formatLogAttributes(k string, v interface{}, depth uint8) map[string]string {
+	if depth >= MaxLogAttributesDepth {
+		return nil
+	}
 	if vStr, ok := v.(string); ok {
 		if len(vStr) > LogAttributeValueLengthLimit {
 			vStr = vStr[:LogAttributeValueLengthLimit] + "..."
@@ -166,11 +199,15 @@ func FormatLogAttributes(ctx context.Context, k string, v interface{}) map[strin
 	if vMap, ok := v.(map[string]interface{}); ok {
 		m := make(map[string]string)
 		for mapKey, mapV := range vMap {
-			for k2, v2 := range FormatLogAttributes(ctx, mapKey, mapV) {
+			for k2, v2 := range formatLogAttributes(mapKey, mapV, depth+1) {
 				m[fmt.Sprintf("%s.%s", k, k2)] = v2
 			}
 		}
 		return m
 	}
 	return nil
+}
+
+func FormatLogAttributes(k string, v interface{}) map[string]string {
+	return formatLogAttributes(k, v, 0)
 }

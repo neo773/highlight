@@ -1,6 +1,7 @@
 import { useAuthContext } from '@authentication/AuthContext'
 import { useGetProjectQuery } from '@graph/hooks'
 import analytics from '@util/analytics'
+import { isOnPrem } from '@util/onPrem/onPremUtils'
 import { useParams } from '@util/react-router/useParams'
 import { useEffect, useState } from 'react'
 
@@ -16,6 +17,7 @@ export enum Feature {
 	HistogramTimelineV2,
 	AiSessionInsights,
 	Analytics,
+	Metrics,
 }
 
 // configures the criteria and percentage of population for which the feature is active.
@@ -45,12 +47,15 @@ export const FeatureConfig: { [key: number]: Config } = {
 		workspace: true,
 		percent: 0,
 		workspaceOverride: new Set<string>([
-			'1',
 			// Numero
 			'701',
 			// MediaJel
 			'9634',
 		]),
+	},
+	[Feature.Metrics]: {
+		workspace: true,
+		percent: 100,
 	},
 } as const
 
@@ -117,7 +122,7 @@ const useFeatureFlag = (feature: Feature, override?: boolean) => {
 		skip: !project_id,
 	})
 
-	const [isOn, setIsOn] = useState<boolean>(!!override)
+	const [isOn, setIsOn] = useState<boolean>(!isOnPrem && !!override)
 
 	useEffect(() => {
 		isFeatureOn(

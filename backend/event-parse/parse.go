@@ -82,8 +82,9 @@ const (
 
 const (
 	ScriptPlaceholder = "SCRIPT_PLACEHOLDER"
-	ProxyURL          = "https://replay-cors-proxy.highlightrun.workers.dev"
 )
+
+var ProxyURL = fmt.Sprintf("%s/cors", util.PublicGraphUri)
 
 var DisallowedTagPrefixes = []string{
 	"onchange",
@@ -168,7 +169,7 @@ func replaceRelativePaths(body []byte, href string) []byte {
 		groups := pathPattern.FindSubmatch(match)
 		u, _ := url.Parse(fmt.Sprintf("%s/%s", *base, groups[1]))
 		u.Path = strings.Trim(u.Path, "/")
-		result := []byte(fmt.Sprintf("url('%s?url=%s')", ProxyURL, u.String()))
+		result := []byte(fmt.Sprintf("url('%s?src=go&url=%s')", ProxyURL, u.String()))
 		return result
 	})
 }
@@ -422,7 +423,7 @@ func (s *Snapshot) InjectStylesheets(ctx context.Context) error {
 		delete(attrs, "rel")
 		delete(attrs, "href")
 
-		// The '_cssText' attribute tells @highlight-run/rrweb to create a custom <style/> tag to populate
+		// The '_cssText' attribute tells rrweb to create a custom <style/> tag to populate
 		// content w/.
 		attrs["_cssText"] = string(data)
 	}
@@ -481,6 +482,7 @@ func getOrCreateUrls(ctx context.Context, projectId int, originalUrls []string, 
 			parsedUrl.Scheme = "https"
 			parsedUrl.Host = "app.priceworx.co.uk"
 			assetURL = parsedUrl.String()
+			log.WithContext(ctx).WithField("u", u).WithField("assetURL", assetURL).WithField("assetKey", assetKey).Warn("fetching priceworx url")
 		}
 		urlMap[u] = assetValue{assetKey, assetURL}
 	}
@@ -776,6 +778,9 @@ func tryGetAssetUrls(ctx context.Context, projectId int, node map[string]interfa
 		newUrl, ok := replacements[href]
 		if ok {
 			attributes["href"] = newUrl
+			if rel, ok := attributes["rel"].(string); ok && rel == "modulepreload" {
+				delete(attributes, "rel")
+			}
 		}
 		urls = append(urls, href)
 	}

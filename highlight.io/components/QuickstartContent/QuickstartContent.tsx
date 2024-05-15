@@ -15,6 +15,7 @@ import { JSNestContent } from './backend/js/nestjs'
 import { JSNodeContent } from './backend/js/nodejs'
 import { JStRPCContent } from './backend/js/trpc'
 import { OTLPErrorMonitoringContent } from './backend/otlp'
+import { PHPOtherContent } from './backend/php/other'
 import { PythonAWSContext } from './backend/python/aws'
 import { PythonAzureContext } from './backend/python/azure'
 import { PythonDjangoContext } from './backend/python/django'
@@ -24,6 +25,8 @@ import { PythonGCPContext } from './backend/python/gcp'
 import { PythonOtherContext } from './backend/python/other'
 import { RubyOtherContent } from './backend/ruby/other'
 import { RubyRailsContent } from './backend/ruby/rails'
+import { RustActixContent } from './backend/rust/actix'
+import { RustOtherContent } from './backend/rust/other'
 import { AngularContent } from './frontend/angular'
 import { GatsbyContent } from './frontend/gatsby'
 import { NextContent } from './frontend/next'
@@ -48,19 +51,24 @@ import { JSOtherLogContent } from './logging/js/other'
 import { JSPinoHTTPJSONLogContent } from './logging/js/pino'
 import { JSWinstonHTTPJSONLogContent } from './logging/js/winston'
 import { OTLPLoggingContent } from './logging/otlp'
+import { PHPOtherLogContent } from './logging/php/other'
 import { PythonLoguruLogContent } from './logging/python/loguru'
 import { PythonOtherLogContent } from './logging/python/other'
 import { RubyOtherLogContent } from './logging/ruby/other'
 import { RubyRailsLogContent } from './logging/ruby/rails'
+import { RustActixLogContent } from './logging/rust/actix'
+import { RustOtherLogContent } from './logging/rust/other'
 import { SyslogContent } from './logging/syslog'
 import { SystemdContent } from './logging/systemd'
 import { DevDeploymentContent } from './self-host/dev-deploy'
 import { SelfHostContent } from './self-host/self-host'
+import { DotNetOTLPTracingContent } from './traces/dot-net'
 import { GoTracesContent } from './traces/go/go'
 import { GormTracesContent } from './traces/go/gorm'
 import { JSManualTracesContent } from './traces/node-js/manual'
 import { NextJsTracesContent } from './traces/node-js/nextjs'
 import { OTLPTracesContent } from './traces/otlp'
+import { PHPTracesContent } from './traces/php'
 import { PythonAWSTracesContent } from './traces/python/aws'
 import { PythonAzureTracesContent } from './traces/python/azure'
 import { PythonDjangoTracesContent } from './traces/python/django'
@@ -68,7 +76,10 @@ import { PythonFastAPITracesContent } from './traces/python/fastapi'
 import { PythonFlaskTracesContent } from './traces/python/flask'
 import { PythonGCPTracesContent } from './traces/python/gcp'
 import { PythonManualTracesContent } from './traces/python/manual'
+import { PythonAITracesContent } from './traces/python/python-ai'
 import { PythonLibrariesTracesContent } from './traces/python/python-libraries'
+import { RustTracesContent } from './traces/rust'
+import { HostingHerokuLogContent } from './logging/hosting/heroku'
 
 export type QuickStartOptions = {
 	title: string
@@ -121,6 +132,7 @@ export enum QuickStartType {
 	PythonAzureFn = 'azure-functions',
 	PythonGCPFn = 'google-cloud-functions',
 	PythonLibraries = 'python-libraries',
+	PythonAI = 'python-ai',
 	GoGqlgen = 'gqlgen',
 	GoFiber = 'fiber',
 	GoChi = 'chi',
@@ -150,11 +162,15 @@ export enum QuickStartType {
 	File = 'file',
 	RubyOther = 'other',
 	RubyRails = 'rails',
+	RustOther = 'other',
+	RustActix = 'actix',
 	JavaOther = 'other',
 	HostingVercel = 'vercel',
 	HostingFlyIO = 'fly-io',
 	HostingRender = 'render',
+	HostingHeroku = 'heroku',
 	OTLP = 'otlp',
+	OTLPDotNet = 'dot-net',
 }
 
 export const quickStartContent = {
@@ -228,6 +244,14 @@ export const quickStartContent = {
 			[QuickStartType.RubyRails]: RubyRailsContent,
 			[QuickStartType.RubyOther]: RubyOtherContent,
 		},
+		rust: {
+			title: 'Rust',
+			subtitle:
+				'Select your Rust framework to install error monitoring for your application.',
+			logoUrl: siteUrl('/images/quickstart/rust.svg'),
+			[QuickStartType.RustActix]: RustActixContent,
+			[QuickStartType.RustOther]: RustOtherContent,
+		},
 		java: {
 			title: 'Java',
 			subtitle:
@@ -235,10 +259,24 @@ export const quickStartContent = {
 			logoUrl: siteUrl('/images/quickstart/java.svg'),
 			[QuickStartType.JavaOther]: JavaOtherContent,
 		},
+		php: {
+			title: 'PHP',
+			subtitle:
+				'Select your PHP framework to install error monitoring for your application.',
+			logoUrl: siteUrl('/images/quickstart/php.svg'),
+			[QuickStartType.Other]: PHPOtherContent,
+		},
+		dotnet: {
+			title: 'C# .NET',
+			subtitle: 'ASP C# .NET Applications',
+			logoUrl: siteUrl('/images/quickstart/dotnet.svg'),
+			[QuickStartType.OTLPDotNet]: DotNetOTLPTracingContent,
+		},
 		otlp: {
 			title: 'OpenTelemetry',
 			subtitle: 'OpenTelemetry Protocol (OTLP)',
 			[QuickStartType.OTLP]: OTLPErrorMonitoringContent,
+			[QuickStartType.OTLPDotNet]: DotNetOTLPTracingContent,
 		},
 	},
 	'backend-logging': {
@@ -292,12 +330,27 @@ export const quickStartContent = {
 			[QuickStartType.RubyRails]: RubyRailsLogContent,
 			[QuickStartType.RubyOther]: RubyOtherLogContent,
 		},
+		rust: {
+			title: 'Rust',
+			subtitle:
+				'Select your Rust framework to install logging in your application.',
+			logoUrl: siteUrl('/images/quickstart/rust.svg'),
+			[QuickStartType.RustActix]: RustActixLogContent,
+			[QuickStartType.RustOther]: RustOtherLogContent,
+		},
 		java: {
 			title: 'Java',
 			subtitle:
 				'Select your Java framework to install logging in your application.',
 			logoUrl: siteUrl('/images/quickstart/java.svg'),
 			[QuickStartType.JavaOther]: JavaOtherLogContent,
+		},
+		php: {
+			title: 'PHP',
+			subtitle:
+				'Select your PHP framework to install error monitoring for your application.',
+			logoUrl: siteUrl('/images/quickstart/php.svg'),
+			[QuickStartType.Other]: PHPOtherLogContent,
 		},
 		hosting: {
 			title: 'Cloud Hosting Provider',
@@ -306,11 +359,19 @@ export const quickStartContent = {
 			[QuickStartType.HostingVercel]: HostingVercelLogContent,
 			[QuickStartType.HostingFlyIO]: HostingFlyIOLogContent,
 			[QuickStartType.HostingRender]: HostingRenderLogContent,
+			[QuickStartType.HostingHeroku]: HostingHerokuLogContent,
+		},
+		dotnet: {
+			title: 'C# .NET',
+			subtitle: 'ASP C# .NET Applications',
+			logoUrl: siteUrl('/images/quickstart/dotnet.svg'),
+			[QuickStartType.OTLPDotNet]: DotNetOTLPTracingContent,
 		},
 		otlp: {
 			title: 'OpenTelemetry',
 			subtitle: 'OpenTelemetry Protocol (OTLP)',
 			[QuickStartType.OTLP]: OTLPLoggingContent,
+			[QuickStartType.OTLPDotNet]: DotNetOTLPTracingContent,
 		},
 	},
 	traces: {
@@ -348,11 +409,33 @@ export const quickStartContent = {
 			[QuickStartType.PythonFlask]: PythonFlaskTracesContent,
 			[QuickStartType.PythonGCPFn]: PythonGCPTracesContent,
 			[QuickStartType.PythonLibraries]: PythonLibrariesTracesContent,
+			[QuickStartType.PythonAI]: PythonAITracesContent,
+		},
+		php: {
+			title: 'PHP',
+			subtitle: 'Install tracing in your PHP application.',
+			logoUrl: siteUrl('/images/quickstart/php.svg'),
+			[QuickStartType.Other]: PHPTracesContent,
+		},
+		dotnet: {
+			title: 'C# .NET',
+			subtitle: 'ASP C# .NET Applications',
+			logoUrl: siteUrl('/images/quickstart/dotnet.svg'),
+			[QuickStartType.OTLPDotNet]: DotNetOTLPTracingContent,
 		},
 		otlp: {
 			title: 'OpenTelemetry',
 			subtitle: 'OpenTelemetry Protocol (OTLP)',
 			[QuickStartType.OTLP]: OTLPTracesContent,
+			[QuickStartType.OTLPDotNet]: DotNetOTLPTracingContent,
+		},
+		rust: {
+			title: 'Rust',
+			subtitle:
+				'Select your Rust framework to install logging in your application.',
+			logoUrl: siteUrl('/images/quickstart/rust.svg'),
+			[QuickStartType.RustOther]: RustTracesContent,
+			[QuickStartType.RustActix]: RustTracesContent,
 		},
 	},
 	other: {

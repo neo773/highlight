@@ -1,8 +1,8 @@
-import { Sprinkles, sprinkles } from '../../css/sprinkles.css'
 import clsx, { ClassValue } from 'clsx'
-
 import React from 'react'
-import { hiddenScroll } from './Box.css'
+
+import { Sprinkles, sprinkles } from '../../css/sprinkles.css'
+import * as styles from './Box.css'
 
 export type BoxProps = Sprinkles &
 	React.PropsWithChildren &
@@ -29,7 +29,7 @@ export type PaddingProps = {
 }
 
 export const Box = React.forwardRef<unknown, BoxProps>(
-	({ as = 'div', cssClass, ...props }, ref) => {
+	({ as = 'div', cssClass, hiddenScroll, ...props }, ref) => {
 		const sprinklesProps: Record<string, unknown> = {}
 		const nativeProps: Record<string, unknown> = {}
 		const userClasses = clsx(cssClass)
@@ -46,7 +46,7 @@ export const Box = React.forwardRef<unknown, BoxProps>(
 			className: clsx([
 				sprinkles(sprinklesProps),
 				userClasses,
-				props.hiddenScroll ? hiddenScroll : null,
+				{ [styles.hiddenScroll]: hiddenScroll },
 			]),
 			ref,
 			...nativeProps,

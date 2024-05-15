@@ -18,10 +18,10 @@ import {
 	Stack,
 	SwitchButton,
 	Text,
-	useFormStore,
 } from '@highlight-run/ui/components'
 import { AuthBody, AuthFooter, AuthHeader } from '@pages/Auth/Layout'
 import { Landing } from '@pages/Landing/Landing'
+import useLocalStorage from '@rehooks/local-storage'
 import { INVITE_TEAM_ROUTE } from '@routers/AppRouter/AppRouter'
 import analytics from '@util/analytics'
 import { getAttributionData } from '@util/attribution'
@@ -29,7 +29,6 @@ import { isOnPrem } from '@util/onPrem/onPremUtils'
 import { message } from 'antd'
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useLocalStorage } from 'react-use'
 
 import { namedOperations } from '@/graph/generated/operations'
 import { DISMISS_JOIN_WORKSPACE_LOCAL_STORAGE_KEY } from '@/pages/Auth/JoinWorkspace'
@@ -88,7 +87,7 @@ export const AdminForm: React.FC = () => {
 	const workspace = workspacesData?.workspaces && workspacesData.workspaces[0]
 	const inWorkspace = !!workspace
 
-	const formStore = useFormStore({
+	const formStore = Form.useStore({
 		defaultValues: {
 			firstName: '',
 			lastName: '',
@@ -258,6 +257,7 @@ export const AdminForm: React.FC = () => {
 							<option value="Product">Product</option>
 							<option value="Engineer">Engineering</option>
 							<option value="Founder">Founder</option>
+							<option value="Sales">Business / Finance</option>
 						</Form.Select>
 						<Form.Select
 							className={styles.select}

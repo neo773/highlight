@@ -9,7 +9,7 @@ import {
 	useGetWorkspacesQuery,
 	useHandleAwsMarketplaceMutation,
 } from '@graph/hooks'
-import { Form, Stack, Text, useFormStore } from '@highlight-run/ui/components'
+import { Form, Stack, Text } from '@highlight-run/ui/components'
 import * as styles from '@pages/Auth/AdminForm.css'
 import * as authRouterStyles from '@pages/Auth/AuthRouter.css'
 import { AuthBody, AuthFooter, AuthHeader } from '@pages/Auth/Layout'
@@ -24,10 +24,11 @@ import { useVercelIntegration } from '@pages/IntegrationsPage/components/VercelI
 import { VercelIntegrationSettings } from '@pages/IntegrationsPage/components/VercelIntegration/VercelIntegrationConfig'
 import { Landing } from '@pages/Landing/Landing'
 import { ApplicationContextProvider } from '@routers/AppRouter/context/ApplicationContext'
+import log from '@util/log'
 import { useParams } from '@util/react-router/useParams'
 import { message } from 'antd'
 import { H } from 'highlight.run'
-import { useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { StringParam, useQueryParams } from 'use-query-params'
 
@@ -234,7 +235,7 @@ const VercelIntegrationCallback = ({ code }: Props) => {
 	}
 
 	// If there are no projects, redirect to create one
-	if (data?.projects?.length === 0) {
+	if ((data?.projects?.length ?? 0) === 0) {
 		const callbackPath = `/callback/vercel${search}`
 
 		if (!isLoggedIn) {
@@ -344,29 +345,43 @@ const WorkspaceIntegrationCallback = ({
 	const navigate = useNavigate()
 	const { setLoadingState } = useAppLoadingContext()
 
-	useEffect(() => {
+	const add = useCallback(async () => {
+		log('IntegrationAuthCallback.tsx', 'add', {
+			setLoadingState,
+			code,
+			projectId,
+			addIntegration,
+			name,
+			type,
+			navigate,
+			next,
+		})
+
 		if (!addIntegration || !code) return
 		const usedCode = sessionStorage.getItem(codeSessionStorageKey) === code
 		if (!!code && usedCode) return
 
-		const redirectUrl = next || `/${projectId}/integrations/${type}`
-		;(async () => {
-			try {
-				sessionStorage.setItem(codeSessionStorageKey, code)
-				await addIntegration(code)
-				message.success(`Highlight is now synced with ${name}!`, 5)
-			} catch (e: any) {
-				H.consumeError(e)
-				console.error(e)
-				message.error(
-					'Failed to add integration to project. Please try again.',
-				)
-			} finally {
-				navigate(redirectUrl)
-				setLoadingState(AppLoadingState.LOADED)
-				sessionStorage.removeItem(codeSessionStorageKey)
-			}
-		})()
+		const redirectUrl =
+			next ||
+			(projectId
+				? `/${projectId}/integrations/${type}`
+				: `/integrations/${type}`)
+		try {
+			sessionStorage.setItem(codeSessionStorageKey, code)
+			log('IntegrationAuthCallback.tsx', 'calling addIntegration')
+			await addIntegration(code)
+			message.success(`Highlight is now synced with ${name}!`, 5)
+		} catch (e: any) {
+			H.consumeError(e)
+			console.error(e)
+			message.error(
+				'Failed to add integration to project. Please try again.',
+			)
+		} finally {
+			navigate(redirectUrl)
+			setLoadingState(AppLoadingState.LOADED)
+			sessionStorage.removeItem(codeSessionStorageKey)
+		}
 	}, [
 		setLoadingState,
 		code,
@@ -377,6 +392,11 @@ const WorkspaceIntegrationCallback = ({
 		navigate,
 		next,
 	])
+	useEffect(() => {
+		add().then(() =>
+			log('IntegrationAuthCallback.tsx', 'added integration'),
+		)
+	}, [add])
 
 	return null
 }
@@ -435,7 +455,7 @@ const AWSMPIntegrationCallback = ({ code }: { code: string }) => {
 	const navigate = useNavigate()
 	const [handle, { loading: handleLoading }] =
 		useHandleAwsMarketplaceMutation()
-	const formStore = useFormStore({
+	const formStore = Form.useStore({
 		defaultValues: {
 			workspaceId: '',
 		},
@@ -610,6 +630,21 @@ const IntegrationAuthCallbackPage = () => {
 
 	const name = integrationName?.toLowerCase() || ''
 
+	const { data: workspacesData } = useGetWorkspacesQuery({
+		variables: {},
+		skip: !!workspaceId,
+	})
+	const currentWorkspaceId = workspacesData?.workspaces?.at(0)?.id ?? ''
+
+	if (name === 'vercel') {
+		return <VercelIntegrationCallback code={code} />
+	}
+
+	log('IntegrationAuthCallback.tsx', { workspaceId, currentWorkspaceId })
+	if (!workspaceId && !currentWorkspaceId) {
+		return null
+	}
+
 	if (WorkspaceIntegrations.has(name)) {
 		let cb = null
 		switch (name) {
@@ -667,7 +702,10 @@ const IntegrationAuthCallbackPage = () => {
 					allProjects: [],
 					currentWorkspace: workspaceId
 						? { id: workspaceId, name: '' }
-						: undefined,
+						: {
+								id: currentWorkspaceId,
+								name: '',
+						  },
 					workspaces: [],
 				}}
 			>
@@ -706,8 +744,6 @@ const IntegrationAuthCallbackPage = () => {
 			return (
 				<FrontIntegrationCallback code={code} projectId={projectId} />
 			)
-		case 'vercel':
-			return <VercelIntegrationCallback code={code} />
 		case 'discord':
 			return (
 				<DiscordIntegrationCallback

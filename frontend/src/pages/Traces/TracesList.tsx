@@ -16,7 +16,8 @@ import {
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { isEqual } from 'lodash'
-import React, { Key, useMemo, useRef } from 'react'
+import React, { Key, useCallback, useMemo, useRef } from 'react'
+import { StringParam, useQueryParam } from 'use-query-params'
 
 import {
 	ColumnHeader,
@@ -26,9 +27,18 @@ import { CustomColumnPopover } from '@/components/CustomColumnPopover'
 import { AdditionalFeedResults } from '@/components/FeedResults/FeedResults'
 import { LinkButton } from '@/components/LinkButton'
 import LoadingBox from '@/components/LoadingBox'
-import { useGetTracesKeysLazyQuery } from '@/graph/generated/hooks'
-import { TraceEdge } from '@/graph/generated/schemas'
-import { useParams } from '@/util/react-router/useParams'
+import {
+	RelatedTrace,
+	useRelatedResource,
+} from '@/components/RelatedResources/hooks'
+import { SORT_COLUMN, SORT_DIRECTION } from '@/components/Search/SearchContext'
+import { DEFAULT_INPUT_HEIGHT } from '@/components/Search/SearchForm/SearchForm'
+import {
+	ProductType,
+	SortDirection,
+	TraceEdge,
+} from '@/graph/generated/schemas'
+import { MAX_TRACES } from '@/pages/Traces/useGetTraces'
 
 import {
 	DEFAULT_TRACE_COLUMNS,
@@ -44,9 +54,12 @@ type Props = {
 	resetMoreTraces?: () => void
 	fetchMoreWhenScrolled: (target: HTMLDivElement) => void
 	loadingAfter: boolean
+	textAreaRef: React.RefObject<HTMLTextAreaElement>
 }
 
 const LOADING_AFTER_HEIGHT = 28
+const HEADERS_AND_CHARTS_HEIGHT = 120
+const LOAD_BEFORE_HEIGHT = 28
 
 export const TracesList: React.FC<Props> = ({
 	loading,
@@ -56,12 +69,41 @@ export const TracesList: React.FC<Props> = ({
 	resetMoreTraces,
 	fetchMoreWhenScrolled,
 	loadingAfter,
+	textAreaRef,
 }) => {
-	const { span_id } = useParams<{ span_id?: string }>()
-
+	const { resource } = useRelatedResource()
+	const trace = resource as RelatedTrace
 	const [selectedColumns, setSelectedColumns] = useLocalStorage(
 		`highlight-traces-table-columns`,
 		DEFAULT_TRACE_COLUMNS,
+	)
+	const [sortColumn, setSortColumn] = useQueryParam(SORT_COLUMN, StringParam)
+	const [sortDirection, setSortDirection] = useQueryParam(
+		SORT_DIRECTION,
+		StringParam,
+	)
+
+	const handleSort = useCallback(
+		(column: string, direction?: SortDirection | null) => {
+			if (
+				column === sortColumn &&
+				(direction === null || sortDirection === SortDirection.Asc)
+			) {
+				setSortColumn(undefined)
+				setSortDirection(undefined)
+			} else {
+				const nextDirection =
+					direction ??
+					(column === sortColumn &&
+					sortDirection === SortDirection.Desc
+						? SortDirection.Asc
+						: SortDirection.Desc)
+
+				setSortColumn(column)
+				setSortDirection(nextDirection)
+			}
+		},
+		[setSortColumn, setSortDirection, sortColumn, sortDirection],
 	)
 
 	const bodyRef = useRef<HTMLDivElement>(null)
@@ -85,6 +127,9 @@ export const TracesList: React.FC<Props> = ({
 				id: column.id,
 				component: column.label,
 				showActions: true,
+				onSort: (direction?: SortDirection | null) => {
+					handleSort(column.id, direction)
+				},
 			})
 
 			// @ts-ignore
@@ -114,11 +159,11 @@ export const TracesList: React.FC<Props> = ({
 			noPadding: true,
 			component: (
 				<CustomColumnPopover
+					productType={ProductType.Traces}
 					selectedColumns={selectedColumns}
 					setSelectedColumns={setSelectedColumns}
 					standardColumns={HIGHLIGHT_STANDARD_COLUMNS}
 					attributePrefix="traceAttributes"
-					getKeysLazyQuery={useGetTracesKeysLazyQuery}
 				/>
 			),
 		})
@@ -128,7 +173,7 @@ export const TracesList: React.FC<Props> = ({
 			columnHeaders,
 			columns,
 		}
-	}, [columnHelper, selectedColumns, setSelectedColumns])
+	}, [columnHelper, handleSort, selectedColumns, setSelectedColumns])
 
 	const table = useReactTable({
 		data: traceEdges,
@@ -157,6 +202,21 @@ export const TracesList: React.FC<Props> = ({
 		paddingBottom += LOADING_AFTER_HEIGHT
 	}
 
+	const otherElementsHeight = useMemo(() => {
+		let height = HEADERS_AND_CHARTS_HEIGHT
+		if (textAreaRef.current) {
+			height += textAreaRef.current.clientHeight
+		} else {
+			height += DEFAULT_INPUT_HEIGHT
+		}
+
+		if (numMoreTraces && numMoreTraces > 0) {
+			height += LOAD_BEFORE_HEIGHT
+		}
+
+		return height
+	}, [numMoreTraces, textAreaRef])
+
 	const handleFetchMoreWhenScrolled = (
 		e: React.UIEvent<HTMLDivElement, UIEvent>,
 	) => {
@@ -165,13 +225,9 @@ export const TracesList: React.FC<Props> = ({
 		}, 0)
 	}
 
-	if (loading) {
-		return <LoadingBox />
-	}
-
-	if (!traceEdges.length) {
+	if (!loading && !traceEdges.length) {
 		return (
-			<Box px="12" py="8">
+			<Box m="8">
 				<Box
 					border="secondary"
 					borderRadius="6"
@@ -228,6 +284,8 @@ export const TracesList: React.FC<Props> = ({
 							setSelectedColumns={setSelectedColumns!}
 							standardColumns={HIGHLIGHT_STANDARD_COLUMNS}
 							trackingIdPrefix="TracesTableColumn"
+							sortColumn={sortColumn}
+							sortDirection={sortDirection}
 						/>
 					))}
 				</Table.Row>
@@ -235,6 +293,7 @@ export const TracesList: React.FC<Props> = ({
 					<Table.Row>
 						<Box width="full">
 							<AdditionalFeedResults
+								maxResults={MAX_TRACES}
 								more={numMoreTraces}
 								type="traces"
 								onClick={() => {
@@ -246,51 +305,55 @@ export const TracesList: React.FC<Props> = ({
 					</Table.Row>
 				)}
 			</Table.Head>
-			<Table.Body
-				ref={bodyRef}
-				height="full"
-				overflowY="auto"
-				onScroll={handleFetchMoreWhenScrolled}
-				style={{
-					// Subtract height of search filters + table header + charts
-					height:
-						numMoreTraces && numMoreTraces > 0
-							? `calc(100% - 191px)`
-							: `calc(100% - 163px)`,
-				}}
-			>
-				{paddingTop > 0 && <Box style={{ height: paddingTop }} />}
-				{virtualRows.map((virtualRow) => {
-					const row = rows[virtualRow.index]
-					const isSelected = row.original.node.spanID === span_id
+			{loading ? (
+				<LoadingBox />
+			) : (
+				<Table.Body
+					ref={bodyRef}
+					height="full"
+					overflowY="auto"
+					onScroll={handleFetchMoreWhenScrolled}
+					style={{
+						height: `calc(100% - ${otherElementsHeight}px)`,
+					}}
+					hiddenScroll
+				>
+					{paddingTop > 0 && <Box style={{ height: paddingTop }} />}
+					{virtualRows.map((virtualRow) => {
+						const row = rows[virtualRow.index]
+						const isSelected =
+							row.original.node.spanID === trace?.spanID
 
-					return (
-						<TracesTableRow
-							key={virtualRow.key}
-							row={row}
-							rowVirtualizer={rowVirtualizer}
-							virtualRowKey={virtualRow.key}
-							isSelected={isSelected}
-							gridColumns={columnData.gridColumns}
-							selectedColumnsIds={selectedColumns.map(
-								(c) => c.id,
-							)}
-						/>
-					)
-				})}
+						return (
+							<TracesTableRow
+								key={virtualRow.key}
+								row={row}
+								rowVirtualizer={rowVirtualizer}
+								virtualRowKey={virtualRow.key}
+								isSelected={isSelected}
+								gridColumns={columnData.gridColumns}
+								selectedColumnsIds={selectedColumns.map(
+									(c) => c.id,
+								)}
+							/>
+						)
+					})}
 
-				{paddingBottom > 0 && <Box style={{ height: paddingBottom }} />}
+					{paddingBottom > 0 && (
+						<Box style={{ height: paddingBottom }} />
+					)}
 
-				{loadingAfter && (
-					<Box
-						style={{
-							height: `${LOADING_AFTER_HEIGHT}px`,
-						}}
-					>
-						<LoadingBox />
-					</Box>
-				)}
-			</Table.Body>
+					{loadingAfter && (
+						<Box
+							style={{
+								height: `${LOADING_AFTER_HEIGHT}px`,
+							}}
+						>
+							<LoadingBox />
+						</Box>
+					)}
+				</Table.Body>
+			)}
 		</Table>
 	)
 }

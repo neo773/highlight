@@ -3,12 +3,17 @@
 	"pipeline": {
 		"highlight.run#typegen": {
 			"dependsOn": [
-				"@highlight-run/rrweb#build",
-				"@highlight-run/rrweb-types#build",
+				"rrweb#build",
+				"@rrweb/types#build",
 				"@highlight-run/client#typegen"
 			],
 			"inputs": ["src/**/*.tsx", "src/**/*.ts", "tsconfig.json"],
 			"outputs": ["dist/**/*.d.ts"]
+		},
+		"highlight.run#build": {
+			"dependsOn": ["typegen", "@highlight-run/client#build"],
+			"inputs": ["src/**/*.tsx", "src/**/*.ts", "tsconfig.json"],
+			"outputs": ["dist/**"]
 		},
 		"highlight.io#build": {
 			"dependsOn": ["^build"],
@@ -77,7 +82,6 @@
 			],
 			"env": [
 				"CLICKUP_CLIENT_ID",
-				"CYPRESS_CLIENT_VERSION",
 				"DD_CLIENT_TOKEN",
 				"DEMO_PROJECT_ID",
 				"DISCORD_CLIENT_ID",
@@ -102,7 +106,7 @@
 			]
 		},
 		"dev": {
-			"dependsOn": ["typegen", "^build"],
+			"dependsOn": ["typegen", "^build", "build"],
 			"cache": false,
 			"persistent": true
 		},

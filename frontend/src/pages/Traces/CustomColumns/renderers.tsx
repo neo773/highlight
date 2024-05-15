@@ -1,6 +1,7 @@
 import {
 	Badge,
 	Box,
+	BoxProps,
 	IconSolidMenuAlt_2,
 	IconSolidPlayCircle,
 	Stack,
@@ -9,46 +10,57 @@ import {
 	Text,
 } from '@highlight-run/ui/components'
 import React from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
 
+import { useRelatedResource } from '@/components/RelatedResources/hooks'
 import { Trace } from '@/graph/generated/schemas'
 import { getTraceDurationString } from '@/pages/Traces/utils'
 import analytics from '@/util/analytics'
+
+type PaddingProps = {
+	pt: BoxProps['p']
+	pb: BoxProps['p']
+}
 
 type ColumnWrapperProps = {
 	children: React.ReactNode
 	first: boolean
 	row: any
+	paddingProps?: PaddingProps
 	onClick?: () => void
 }
 
 const ColumnWrapper: React.FC<ColumnWrapperProps> = ({
 	children,
 	first,
+	paddingProps,
 	row,
 	onClick,
 }) => {
-	const navigate = useNavigate()
-	const location = useLocation()
+	const { set } = useRelatedResource()
 
 	if (!first) {
 		return (
-			<Table.Cell onClick={onClick}>
+			<Table.Cell onClick={onClick} {...paddingProps}>
 				<span>{children}</span>
 			</Table.Cell>
 		)
 	}
 
-	const viewTrace = (trace: Partial<Trace>) => {
-		navigate(
-			`/${trace.projectID}/traces/${trace.traceID}/${trace.spanID}${location.search}`,
-		)
+	const viewTrace = (trace: Trace) => {
+		set({
+			type: 'trace',
+			id: trace.traceID,
+			spanID: trace.spanID,
+		})
 
 		analytics.track('traces_trace-row_click')
 	}
 
 	return (
-		<Table.Cell onClick={() => viewTrace(row.original.node)}>
+		<Table.Cell
+			onClick={() => viewTrace(row.original.node)}
+			{...paddingProps}
+		>
 			<Box
 				display="flex"
 				alignItems="center"
@@ -87,7 +99,10 @@ const StringColumnRenderer: React.FC<ColumnRendererProps> = ({
 	getValue,
 	first,
 }) => {
-	const value = getValue()
+	let value = getValue()
+	if (typeof value === 'object') {
+		value = JSON.stringify(value)
+	}
 	const color = first ? 'strong' : undefined
 
 	return (
@@ -126,18 +141,29 @@ const SessionColumnRenderer: React.FC<ColumnRendererProps> = ({
 	getValue,
 	first,
 }) => {
-	const navigate = useNavigate()
+	const { set } = useRelatedResource()
 	const secureSessionID = getValue()
-	const trace = row.original.node
 	const onClick = secureSessionID
 		? () => {
-				analytics.track('View session from trace list')
-				navigate(`/${trace.projectID}/sessions/${secureSessionID}`)
+				set({
+					type: 'session',
+					secureId: secureSessionID,
+				})
+
+				analytics.track('traces_session-column_click')
 		  }
+		: undefined
+	const paddingProps = secureSessionID
+		? { pt: '4' as const, pb: '0' as const }
 		: undefined
 
 	return (
-		<ColumnWrapper first={first} row={row} onClick={onClick}>
+		<ColumnWrapper
+			first={first}
+			row={row}
+			onClick={onClick}
+			paddingProps={paddingProps}
+		>
 			{secureSessionID ? (
 				<Tag
 					kind="secondary"

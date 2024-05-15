@@ -1,0 +1,91 @@
+import { vars } from '@highlight-run/ui/vars'
+import { style } from '@vanilla-extract/css'
+
+export const loadingOverlay = style({
+	zIndex: 2,
+	pointerEvents: 'none',
+})
+
+export const loadingText = style({
+	border: vars.border.divider,
+	padding: 4,
+	borderRadius: 4,
+	backgroundColor: vars.color.white,
+})
+
+export const legendWrapper = style({
+	left: -6,
+	maxHeight: 40,
+	paddingTop: 2,
+	paddingBottom: 2,
+	overflowY: 'auto',
+	display: 'flex',
+	flexWrap: 'wrap',
+	rowGap: 4,
+})
+
+export const legendDot = style({
+	borderRadius: '50%',
+	margin: 'auto',
+	marginRight: '4px',
+	width: 8,
+	height: 8,
+	flexShrink: 0,
+})
+
+export const legendTextWrapper = style({
+	textAlign: 'left',
+})
+
+export const legendTextButton = style({
+	height: 16,
+	flex: '1 0 calc(100% / 3)',
+	maxWidth: 'fit-content',
+})
+
+export const titleText = style({
+	lineHeight: '24px',
+	height: '24px',
+	alignItems: 'center',
+	display: 'flex',
+})
+
+export const hiddenMenu = style({
+	visibility: 'hidden',
+})
+
+export const tooltipWrapper = style({
+	backgroundColor: 'white',
+	border: vars.border.divider,
+	borderRadius: '6px',
+	minWidth: '100px',
+	display: 'flex',
+	flexDirection: 'column',
+	gap: '6px',
+	padding: '8px',
+	maxHeight: '180px',
+	overflowY: 'auto',
+})
+
+export const tooltipText = style({
+	lineHeight: '16px',
+})
+
+export const tooltipDot = style({
+	borderRadius: '50%',
+	marginRight: '4px',
+	width: 8,
+	height: 8,
+})
+
+export const disabled = style({
+	pointerEvents: 'none',
+})
+
+export const hoverCard = style({
+	width: 'min-content',
+})
+
+export const tickText = style({
+	userSelect: 'none',
+})

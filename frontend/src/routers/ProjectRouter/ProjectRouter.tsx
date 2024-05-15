@@ -10,8 +10,7 @@ import {
 	useAppLoadingContext,
 } from '@context/AppLoadingContext'
 import { useGetProjectDropdownOptionsQuery } from '@graph/hooks'
-import { ErrorObject, Maybe, Project, Workspace } from '@graph/schemas'
-import { Ariakit } from '@highlight-run/ui/components'
+import { Maybe, Project, Workspace } from '@graph/schemas'
 import {
 	useLocalStorageProjectId,
 	useNumericProjectId,
@@ -112,7 +111,7 @@ export const ProjectRouter = () => {
 		?.pop()
 
 	const [rightPanelView, setRightPanelView] = useLocalStorage<RightPanelView>(
-		'tabs-right-panel-view',
+		'active-right-panel-view',
 		RightPanelView.Session,
 	)
 
@@ -124,20 +123,14 @@ export const ProjectRouter = () => {
 
 	const [searchItem, setSearchItem] = useState<string | undefined>('')
 
-	const [activeError, setActiveError] = useState<ErrorObject | undefined>(
-		undefined,
-	)
-
 	const [selectedRightPanelTab, setSelectedRightPanelTab] =
 		useLocalStorage<RightPlayerTab>(
 			'tabs-PlayerRightPanel-active-tab',
-			'Events',
+			RightPlayerTab.Events,
 		)
 
 	const { isPlayerFullscreen, setIsPlayerFullscreen, playerCenterPanelRef } =
 		usePlayerFullscreen()
-
-	const commandBarDialog = Ariakit.useDialogStore()
 
 	const playerUIContext = {
 		isPlayerFullscreen,
@@ -151,8 +144,6 @@ export const ProjectRouter = () => {
 		setActiveEventIndex,
 		searchItem,
 		setSearchItem,
-		activeError,
-		setActiveError,
 		rightPanelView,
 		setRightPanelView,
 	}
@@ -164,7 +155,6 @@ export const ProjectRouter = () => {
 				toggleShowKeyboardShortcutsGuide,
 				showBanner,
 				toggleShowBanner,
-				commandBarDialog,
 			}}
 		>
 			<PlayerUIContextProvider value={playerUIContext}>

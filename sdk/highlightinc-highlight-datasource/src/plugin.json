@@ -7,8 +7,9 @@
   "executable": "gpx_highlightinc_highlight_datasource",
   "alerting": true,
   "metrics": true,
+  "logs": true,
   "info": {
-    "description": "highlight.io is a monitoring tool for the next generation of developers (like you!). Unlike the age-old, outdated tools out there, we aim to build a cohesive, modern and fully-featured monitoring solution, something we wished WE had. And it's all open source :)",
+    "description": "Query and alert based on metrics from highlight.io traces, logs, errors, and sessions.",
     "author": {
       "name": "Highlight.io"
     },
@@ -21,6 +22,10 @@
       {
         "name": "Home",
         "url": "https://www.highlight.io/"
+      },
+      {
+        "name": "Project",
+        "url": "https://github.com/highlight/highlight"
       }
     ],
     "screenshots": [
@@ -31,7 +36,7 @@
     "updated": "%TODAY%"
   },
   "dependencies": {
-    "grafanaDependency": ">=10.0.3",
+    "grafanaDependency": ">=10.1.0",
     "plugins": []
   }
 }

@@ -5,8 +5,6 @@ import {
 	useDeleteLogAlertMutation,
 	useGetLogAlertQuery,
 	useGetLogsHistogramQuery,
-	useGetLogsKeysLazyQuery,
-	useGetLogsKeyValuesLazyQuery,
 	useUpdateLogAlertMutation,
 } from '@graph/hooks'
 import {
@@ -15,21 +13,18 @@ import {
 	Box,
 	Column,
 	Container,
-	defaultPresets,
+	DateRangePicker,
+	DEFAULT_TIME_PRESETS,
 	Form,
-	getNow,
 	IconSolidCheveronDown,
 	IconSolidCheveronRight,
 	IconSolidCheveronUp,
 	IconSolidSpeakerphone,
 	Menu,
-	PreviousDateRangePicker,
+	presetStartDate,
 	Stack,
 	Tag,
 	Text,
-	useForm,
-	useFormStore,
-	useMenu,
 } from '@highlight-run/ui/components'
 import { useProjectId } from '@hooks/useProjectId'
 import { useSlackSync } from '@hooks/useSlackSync'
@@ -38,11 +33,7 @@ import {
 	FREQUENCIES,
 } from '@pages/Alerts/AlertConfigurationCard/AlertConfigurationConstants'
 import { useLogAlertsContext } from '@pages/Alerts/LogAlert/context'
-import {
-	AlertForm,
-	dedupeEnvironments,
-	EnvironmentSuggestion,
-} from '@pages/Alerts/utils/AlertsUtils'
+import { AlertForm } from '@pages/Alerts/utils/AlertsUtils'
 import LogsHistogram from '@pages/LogsPage/LogsHistogram/LogsHistogram'
 import { useParams } from '@util/react-router/useParams'
 import { message } from 'antd'
@@ -50,13 +41,16 @@ import { capitalize } from 'lodash'
 import moment from 'moment'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { DateTimeParam, StringParam, useQueryParam } from 'use-query-params'
+import { StringParam, useQueryParam } from 'use-query-params'
 
 import { getSlackUrl } from '@/components/Header/components/ConnectHighlightWithSlackButton/utils/utils'
 import LoadingBox from '@/components/LoadingBox'
+import { SearchContext } from '@/components/Search/SearchContext'
 import { TIME_FORMAT } from '@/components/Search/SearchForm/constants'
 import { Search } from '@/components/Search/SearchForm/SearchForm'
 import { namedOperations } from '@/graph/generated/operations'
+import { ProductType } from '@/graph/generated/schemas'
+import { useSearchTime } from '@/hooks/useSearchTime'
 import SlackLoadOrConnect from '@/pages/Alerts/AlertConfigurationCard/SlackLoadOrConnect'
 import AlertTitleField from '@/pages/Alerts/components/AlertTitleField/AlertTitleField'
 import analytics from '@/util/analytics'
@@ -66,18 +60,11 @@ import * as styles from './styles.css'
 const LOG_ALERT_MINIMUM_FREQUENCY = 15
 
 export const LogAlertPage = () => {
-	const [startDateParam] = useQueryParam('start_date', DateTimeParam)
-	const [endDateParam] = useQueryParam('end_date', DateTimeParam)
-
-	const [startDate, setStartDate] = useState(
-		startDateParam ?? defaultPresets[0].startDate,
-	)
-
-	const [endDate, setEndDate] = useState(endDateParam ?? getNow().toDate())
-	const [selectedDates, setSelectedDates] = useState<Date[]>([
-		startDate,
-		endDate,
-	])
+	const { startDate, endDate, selectedPreset, updateSearchTime } =
+		useSearchTime({
+			presets: DEFAULT_TIME_PRESETS,
+			initialPreset: DEFAULT_TIME_PRESETS[0],
+		})
 
 	const { projectId } = useProjectId()
 
@@ -92,13 +79,6 @@ export const LogAlertPage = () => {
 	const isCreate = alert_id === undefined
 	const createStr = isCreate ? 'create' : 'update'
 
-	useEffect(() => {
-		if (selectedDates.length === 2) {
-			setStartDate(selectedDates[0])
-			setEndDate(selectedDates[1])
-		}
-	}, [selectedDates])
-
 	const { data, loading } = useGetLogAlertQuery({
 		variables: {
 			id: alert_id || 'never',
@@ -106,12 +86,11 @@ export const LogAlertPage = () => {
 		skip: !alert_id,
 	})
 
-	const formStore = useFormStore<LogMonitorForm>({
+	const formStore = Form.useStore<LogMonitorForm>({
 		defaultValues: {
 			query: initialQuery,
 			name: '',
 			belowThreshold: false,
-			excludedEnvironments: [],
 			slackChannels: [],
 			discordChannels: [],
 			microsoftTeamsChannels: [],
@@ -123,16 +102,15 @@ export const LogAlertPage = () => {
 			loaded: false,
 		},
 	})
-	const formValues = formStore.useState().values
+	const formValues = formStore.useState('values')
 
-	const [query, setQuery] = useState(initialQuery)
 	const handleUpdateInputQuery = (query: string) => {
 		setSubmittedQuery(query)
 		formStore.setValue(formStore.names.query, query)
 	}
 
 	formStore.useSubmit(() => {
-		setSubmittedQuery(query)
+		setSubmittedQuery(formValues.query)
 	})
 
 	useEffect(() => {
@@ -143,7 +121,6 @@ export const LogAlertPage = () => {
 				query: data?.log_alert.query,
 				name: data?.log_alert.Name,
 				belowThreshold: data?.log_alert.BelowThreshold,
-				excludedEnvironments: data?.log_alert.ExcludedEnvironments,
 				slackChannels: data?.log_alert.ChannelsToNotify.map((c) => ({
 					...c,
 					webhook_channel_name: c.webhook_channel,
@@ -278,7 +255,6 @@ export const LogAlertPage = () => {
 									id: c.id,
 								})),
 							emails: formValues.emails,
-							environments: formValues.excludedEnvironments,
 							name: formValues.name,
 							project_id: project_id || '0',
 							slack_channels: formValues.slackChannels.map(
@@ -297,7 +273,7 @@ export const LogAlertPage = () => {
 
 						const nameErr = !input.name
 						const thresholdErr =
-							!input.count_threshold || input.count_threshold < 1
+							!input.count_threshold || input.count_threshold < 0
 						const queryErr = !input.query
 						if (nameErr || thresholdErr || queryErr) {
 							const errs = []
@@ -312,7 +288,7 @@ export const LogAlertPage = () => {
 							if (thresholdErr) {
 								formStore.setError(
 									formStore.names.threshold,
-									'Threshold cannot be less than 1',
+									'Threshold cannot be less than 0',
 								)
 								errs.push('threshold')
 							}
@@ -460,16 +436,18 @@ export const LogAlertPage = () => {
 													Log monitor
 												</Text>
 											</Box>
-											<PreviousDateRangePicker
-												selectedDates={selectedDates}
-												onDatesChange={setSelectedDates}
-												presets={defaultPresets}
-												minDate={
-													defaultPresets[5].startDate
-												}
-												kind="secondary"
-												size="medium"
-												emphasis="low"
+											<DateRangePicker
+												emphasis="medium"
+												selectedValue={{
+													startDate,
+													endDate,
+													selectedPreset,
+												}}
+												onDatesChange={updateSearchTime}
+												presets={DEFAULT_TIME_PRESETS}
+												minDate={presetStartDate(
+													DEFAULT_TIME_PRESETS[5],
+												)}
 											/>
 										</Box>
 										<AlertTitleField />
@@ -483,37 +461,27 @@ export const LogAlertPage = () => {
 													: undefined,
 											}}
 										>
-											<Search
+											<SearchContext
 												initialQuery={initialQuery}
-												startDate={startDate}
-												endDate={endDate}
-												hideIcon
-												placeholder="Define query..."
-												query={query}
-												setQuery={setQuery}
-												onFormSubmit={
+												onSubmit={
 													handleUpdateInputQuery
 												}
-												fetchValuesLazyQuery={
-													useGetLogsKeyValuesLazyQuery
-												}
-												fetchKeysLazyQuery={
-													useGetLogsKeysLazyQuery
-												}
-											/>
+											>
+												<Search
+													startDate={startDate}
+													endDate={endDate}
+													hideIcon
+													placeholder="Define query..."
+													productType={
+														ProductType.Logs
+													}
+												/>
+											</SearchContext>
 										</Box>
 										<LogsHistogram
 											startDate={startDate}
 											endDate={endDate}
-											onDatesChange={(
-												startDate,
-												endDate,
-											) => {
-												setSelectedDates([
-													startDate,
-													endDate,
-												])
-											}}
+											onDatesChange={updateSearchTime}
 											onLevelChange={() => {}}
 											outline
 											threshold={threshold}
@@ -543,21 +511,12 @@ export const LogAlertPage = () => {
 
 const LogAlertForm = () => {
 	const { projectId } = useProjectId()
-	const formStore = useForm() as Ariakit.FormStore<LogMonitorForm>
+	const formStore = Form.useContext() as Ariakit.FormStore<LogMonitorForm>
 	const errors = formStore.useState('errors')
 
 	const { alertsPayload } = useLogAlertsContext()
 	const { slackLoading, syncSlack } = useSlackSync()
 	const [slackSearchQuery, setSlackSearchQuery] = useState('')
-
-	const environments = dedupeEnvironments(
-		(alertsPayload?.environment_suggestion ??
-			[]) as EnvironmentSuggestion[],
-	).map((environmentSuggestion) => ({
-		displayValue: environmentSuggestion,
-		value: environmentSuggestion,
-		id: environmentSuggestion,
-	}))
 
 	const slackChannels = (alertsPayload?.slack_channel_suggestion ?? []).map(
 		({ webhook_channel, webhook_channel_id }) => ({
@@ -593,105 +552,70 @@ const LogAlertForm = () => {
 
 	return (
 		<Box cssClass={styles.grid}>
-			<Stack justifyContent="space-between">
-				<Stack gap="12">
-					<Box
-						cssClass={styles.sectionHeader}
-						justifyContent="space-between"
-					>
-						<Text size="large" weight="bold" color="strong">
-							Alert conditions
-						</Text>
-						<Menu>
-							<ThresholdTypeConfiguration />
-						</Menu>
-					</Box>
-					<Box borderTop="dividerWeak" width="full" />
-					<Column.Container gap="12">
-						<Column>
-							<Form.Input
-								name={formStore.names.threshold}
-								type="number"
-								label="Alert threshold"
-								tag={
-									<Badge
-										shape="basic"
-										variant="red"
-										size="small"
-										label="Red"
-									/>
-								}
-								style={{
-									borderColor: errors.threshold
-										? 'var(--color-red-500)'
-										: undefined,
-								}}
-							/>
-						</Column>
+			<Stack gap="12">
+				<Box
+					cssClass={styles.sectionHeader}
+					justifyContent="space-between"
+				>
+					<Text size="large" weight="bold" color="strong">
+						Alert conditions
+					</Text>
+					<Menu>
+						<ThresholdTypeConfiguration />
+					</Menu>
+				</Box>
+				<Box borderTop="dividerWeak" width="full" />
+				<Column.Container gap="12">
+					<Column>
+						<Form.Input
+							name={formStore.names.threshold}
+							type="number"
+							label="Alert threshold"
+							tag={
+								<Badge
+									shape="basic"
+									variant="red"
+									size="small"
+									label="Red"
+								/>
+							}
+							style={{
+								borderColor: errors.threshold
+									? 'var(--color-red-500)'
+									: undefined,
+							}}
+						/>
+					</Column>
 
-						<Column>
-							<Form.Select
-								label="Alert frequency"
-								name={formStore.names.frequency.toString()}
-								onChange={(e) =>
-									formStore.setValue(
-										formStore.names.frequency,
-										e.target.value,
-									)
-								}
-							>
-								<option value="" disabled>
-									Select alert frequency
-								</option>
-								{FREQUENCIES.filter(
-									(freq) =>
-										Number(freq.value) >=
-										LOG_ALERT_MINIMUM_FREQUENCY,
-								).map((freq: any) => (
-									<option
-										key={freq.id}
-										value={Number(freq.value)}
-									>
-										{freq.displayValue}
-									</option>
-								))}
-							</Form.Select>
-						</Column>
-					</Column.Container>
-				</Stack>
-
-				<Stack gap="12">
-					<Box cssClass={styles.sectionHeader}>
-						<Text size="large" weight="bold" color="strong">
-							General
-						</Text>
-					</Box>
-
-					<Box borderTop="dividerWeak" width="full" />
-
-					<Form.NamedSection
-						label="Excluded environments"
-						name={formStore.names.excludedEnvironments}
-					>
-						<Select
-							aria-label="Excluded environments list"
-							placeholder="Select excluded environments"
-							options={environments}
-							onChange={(values: any): any =>
+					<Column>
+						<Form.Select
+							label="Alert frequency"
+							name={formStore.names.frequency.toString()}
+							onChange={(e) =>
 								formStore.setValue(
-									formStore.names.excludedEnvironments,
-									values,
+									formStore.names.frequency,
+									e.target.value,
 								)
 							}
-							notFoundContent={<p>No environment suggestions</p>}
-							className={styles.selectContainer}
-							mode="multiple"
-							value={formStore.getValue(
-								formStore.names.excludedEnvironments,
-							)}
-						/>
-					</Form.NamedSection>
-				</Stack>
+						>
+							<option value="" disabled>
+								Select alert frequency
+							</option>
+							{FREQUENCIES.filter(
+								(freq) =>
+									Number(freq.value) >=
+									LOG_ALERT_MINIMUM_FREQUENCY,
+							).map((freq: any) => (
+								<option
+									key={freq.id}
+									value={Number(freq.value)}
+								>
+									{freq.displayValue}
+								</option>
+							))}
+						</Form.Select>
+					</Column>
+				</Column.Container>
 			</Stack>
 			<Stack gap="12">
 				<Stack gap="12">
@@ -868,8 +792,8 @@ const LogAlertForm = () => {
 }
 
 const ThresholdTypeConfiguration = () => {
-	const form = useForm()
-	const menu = useMenu()
+	const form = Form.useContext()!
+	const menu = Menu.useContext()!
 	const menuState = menu.getState()
 	const belowThreshold = form.useValue('belowThreshold')
 
@@ -910,7 +834,7 @@ const ThresholdTypeConfiguration = () => {
 	)
 }
 
-interface LogMonitorForm extends AlertForm {
+interface LogMonitorForm extends Omit<AlertForm, 'excludedEnvironments'> {
 	query: string
 }
 

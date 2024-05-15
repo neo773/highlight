@@ -43,6 +43,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 					enabled: true,
 					recordHeadersAndBody: true
 				}}
+				debug
 			/>
 
 			<html lang="en">
@@ -143,6 +144,8 @@ function ThrowerOfErrors({
 We use `experimental.instrumentationHook` to capture [Next.js's automatic instrumentation](https://nextjs.org/docs/app/building-your-application/optimizing/open-telemetry). This method captures detailed API route tracing as well as server-side errors.
 
 1. Enable `experimental.instrumentationHook` in `next.config.js`.
+2. Ignore warnings from `@highlight-run/node` due to a [known OpenTelemetry issue](https://github.com/open-telemetry/opentelemetry-js/issues/4173#issuecomment-1822938936)
+
 ```javascript
 // next.config.mjs
 import { withHighlightConfig } from '@highlight-run/next/config'
@@ -150,6 +153,13 @@ import { withHighlightConfig } from '@highlight-run/next/config'
 const nextConfig = {
 	experimental: {
 		instrumentationHook: true,
+	},
+	webpack(config, options) {
+		if (options.isServer) {
+			config.ignoreWarnings = [{ module: /highlight-(run\/)?node/ }]
+		}
+
+		return config
 	},
 	// ...additional config
 }
@@ -175,6 +185,8 @@ export async function register() {
 ## Catch server-side render (SSR) errors
 
 App Router uses [app/error.tsx](https://nextjs.org/docs/app/api-reference/file-conventions/error) to send server-side render errors to the client. We can catch and consume those errors with a custom error page.
+
+This will captures any server-rendered error, including those generated from React Server Components, as sometimes identified with the `'use server'` directive.
 
 All SSR error will display as client errors on your Highlight dashboard.
 
@@ -218,25 +230,62 @@ export default appRouterSsrErrorHandler(
 
 ```jsx
 // app/app-router-ssr/page.tsx
+'use server'
+
 type Props = {
 	searchParams: { error?: string }
 }
 
-export default function SsrPage({ searchParams }: Props) {
-	if (typeof searchParams.error === 'string') {
-		throw new Error('SSR Error: app/app-router-ssr/page.tsx')
+export default async function SsrPage({ searchParams }: Props) {
+	if (typeof searchParams.error !== "undefined") {
+		throw new Error(
+			'🎉 SSR Error with use-server: src/app-router/ssr/page.tsx',
+		)
 	}
 
 	return (
 		<div>
-			<h1>App Directory SSR: Success</h1>
+			<h1>App Router SSR with use-server: Success</h1>
 			<p>The random number is {Math.random()}</p>
 			<p>The date is {new Date().toLocaleTimeString()}</p>
 		</div>
 	)
 }
+```
 
-export const revalidate = 30 // seconds
+### Validate server actions
+
+1. Copy the following code into `app/server-actions/page.tsx`.
+2. Visit http://localhost:3000/server-actions and submit the form.
+3. Navigate to `app.highlight.io` to validate that the error was captured.
+
+```jsx
+export default function Page() {
+	async function createInvoice(formData: FormData) {
+		'use server'
+
+		if (formData.get('isError')) {
+			throw new Error(
+				'🌋 Server action error: src/app/server-actions/page.tsx',
+			)
+		}
+
+		console.info(
+			'🎉 Server action success: src/app/server-actions/page.tsx',
+		)
+	}
+
+	return (
+		<form action={createInvoice} style={{ padding: '1rem' }}>
+			<div style={{ display: 'flex', gap: '1rem' }}>
+				<label>Throw error</label>
+				<input type="checkbox" name="isError" defaultChecked />
+
+				<button>Submit form</button>
+			</div>
+		</form>
+	)
+}
 ```
 
 ### Skip localhost tracking
@@ -341,6 +390,21 @@ export const GET = withAppRouterHighlight(async function GET(request: NextReques
 		return new Response('Success: app/nodejs-app-router-test')
 	}
 })
+```
+
+4. Add `highlightMiddleware` to enable cookie-based session tracking
+
+```typescript
+// middleware.ts
+import type { NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
+import { highlightMiddleware } from '@highlight-run/next/server'
+
+export function middleware(request: NextRequest) {
+	highlightMiddleware(request)
+
+	return NextResponse.next()
+}
 ```
 
 ## Validation

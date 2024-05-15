@@ -11,6 +11,7 @@ import (
 	"github.com/highlight-run/highlight/backend/redis"
 	"github.com/highlight-run/highlight/backend/storage"
 	"github.com/highlight-run/highlight/backend/store"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 
 	pointy "github.com/openlyinc/pointy"
@@ -431,7 +432,7 @@ func TestResolver_canAdminViewSession(t *testing.T) {
 	for _, v := range tests {
 		util.RunTestWithDBWipe(t, DB, func(t *testing.T) {
 			redisClient := redis.NewClient()
-			ctx := context.Background()
+			ctx := context.WithValue(context.Background(), model.ContextKeys.UID, "a1b2c3")
 			if err := redisClient.Cache.Delete(ctx, "session-secure-abc123"); err != nil {
 				t.Fatal(err)
 			}
@@ -495,7 +496,7 @@ func TestResolver_isAdminInProjectOrDemoProject(t *testing.T) {
 	}
 	for _, v := range tests {
 		util.RunTestWithDBWipe(t, DB, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := context.WithValue(context.Background(), model.ContextKeys.UID, "a1b2c3")
 			r := &queryResolver{Resolver: &Resolver{DB: DB}}
 
 			w := model.Workspace{}
@@ -548,5 +549,79 @@ func TestGetSlackChannelsFromSlack(t *testing.T) {
 		assert.NotNil(t, channels)
 		assert.Greater(t, count, 0)
 		assert.Greater(t, len(*channels), 0)
+	})
+}
+
+func TestCreateAllModels(t *testing.T) {
+	util.RunTestWithDBWipe(t, DB, func(t *testing.T) {
+		for _, dbModel := range model.Models {
+			switch typ := dbModel.(type) {
+			// OAuthClientStore has a not-null constraint on Domains
+			case *model.OAuthClientStore:
+				typ.Domains = pq.StringArray{}
+			}
+			assert.NoError(t, DB.Create(dbModel).Error)
+		}
+	})
+}
+
+func TestAdminEmailAddresses(t *testing.T) {
+	util.RunTestWithDBWipe(t, DB, func(t *testing.T) {
+		w1 := model.Workspace{}
+		if err := DB.Create(&w1).Error; err != nil {
+			t.Fatal(e.Wrap(err, "error creating workspace w1"))
+		}
+
+		w2 := model.Workspace{}
+		if err := DB.Create(&w2).Error; err != nil {
+			t.Fatal(e.Wrap(err, "error creating workspace w2"))
+		}
+
+		for _, info := range []struct {
+			AdminID     int
+			WorkspaceID int
+			Email       string
+			Role        string
+		}{
+			{1, w1.ID, "admin@example.com", "ADMIN"},
+			{2, w1.ID, "member@example.com", "MEMBER"},
+			{3, w2.ID, "admin2@example.com", "ADMIN"},
+			{4, w2.ID, "member2@example.com", "MEMBER"},
+		} {
+			admin := model.Admin{
+				Model: model.Model{ID: info.AdminID},
+				Email: &info.Email,
+			}
+
+			if err := DB.Create(&admin).Error; err != nil {
+				t.Fatal(e.Wrap(err, "error creating admin"))
+			}
+
+			workspaceAdmin := model.WorkspaceAdmin{
+				AdminID:     info.AdminID,
+				WorkspaceID: info.WorkspaceID,
+				Role:        &info.Role,
+			}
+
+			if err := DB.Create(&workspaceAdmin).Error; err != nil {
+				t.Fatal(e.Wrap(err, "error creating workspace admin"))
+			}
+		}
+
+		addrs, err := w1.AdminEmailAddresses(DB)
+		assert.NoError(t, err)
+		assert.Len(t, addrs, 1)
+		if len(addrs) > 0 {
+			assert.Equal(t, addrs[0].AdminID, 1)
+			assert.Equal(t, addrs[0].Email, "admin@example.com")
+		}
+
+		addrs, err = w2.AdminEmailAddresses(DB)
+		assert.NoError(t, err)
+		assert.Len(t, addrs, 1)
+		if len(addrs) > 0 {
+			assert.Equal(t, addrs[0].AdminID, 3)
+			assert.Equal(t, addrs[0].Email, "admin2@example.com")
+		}
 	})
 }

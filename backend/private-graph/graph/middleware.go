@@ -13,7 +13,6 @@ import (
 
 	firebase "firebase.google.com/go"
 	"firebase.google.com/go/auth"
-	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 
@@ -217,7 +216,7 @@ func getSourcemapRequestToken(r *http.Request) string {
 func PrivateMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		span, ctx := util.StartSpanFromContext(ctx, "middleware.private", util.WithSpanKind(trace.SpanKindServer))
+		span, ctx := util.StartSpanFromContext(ctx, "middleware.private")
 		defer span.Finish()
 		var err error
 		if token := r.Header.Get("token"); token != "" {
@@ -261,7 +260,7 @@ func PrivateMiddleware(next http.Handler) http.Handler {
 }
 
 func WebsocketInitializationFunction() transport.WebsocketInitFunc {
-	return transport.WebsocketInitFunc(func(socketContext context.Context, initPayload transport.InitPayload) (context.Context, error) {
+	return transport.WebsocketInitFunc(func(socketContext context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
 		token := ""
 		if initPayload["token"] != nil {
 			token = fmt.Sprintf("%v", initPayload["token"])
@@ -270,6 +269,6 @@ func WebsocketInitializationFunction() transport.WebsocketInitFunc {
 		if err != nil {
 			log.WithContext(ctx).Errorf("Unable to authenticate/initialize websocket: %s", err.Error())
 		}
-		return ctx, err
+		return ctx, &initPayload, err
 	})
 }

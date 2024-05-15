@@ -1,13 +1,10 @@
 import {
-	AmplitudeAPI,
+	type AmplitudeAPI,
 	setupAmplitudeIntegration,
 } from './integrations/amplitude.js'
 import { SESSION_STORAGE_KEYS } from '@highlight-run/client/src/utils/sessionStorage/sessionStorageKeys.js'
+import type { Highlight, HighlightClassOptions } from '@highlight-run/client'
 import type {
-	Highlight,
-	HighlightClassOptions,
-} from '@highlight-run/client/src/index.js'
-import {
 	HighlightOptions,
 	HighlightPublicInterface,
 	Metadata,
@@ -16,7 +13,7 @@ import {
 	SessionDetails,
 } from '@highlight-run/client/src/types/types.js'
 import {
-	MixpanelAPI,
+	type MixpanelAPI,
 	setupMixpanelIntegration,
 } from './integrations/mixpanel.js'
 
@@ -27,12 +24,13 @@ import configureElectronHighlight from './environments/electron.js'
 import firstloadVersion from './__generated/version.js'
 import {
 	getPreviousSessionData,
-	SessionData,
+	type SessionData,
 } from '@highlight-run/client/src/utils/sessionStorage/highlightSession.js'
-import { initializeFetchListener } from './listeners/fetch/index.js'
-import { initializeWebSocketListener } from './listeners/web-socket/index.js'
+import { initializeFetchListener } from './listeners/fetch'
+import { initializeWebSocketListener } from './listeners/web-socket'
 import { listenToChromeExtensionMessage } from './browserExtension/extensionListener.js'
 import { setItem } from '@highlight-run/client/src/utils/storage.js'
+import { ErrorMessageType } from '@highlight-run/client/src/types/shared-types'
 
 enum MetricCategory {
 	Device = 'Device',
@@ -66,7 +64,6 @@ let onHighlightReadyQueue: {
 }[] = []
 let onHighlightReadyTimeout: number | undefined = undefined
 
-let script: HTMLScriptElement
 let highlight_obj: Highlight
 let first_load_listeners: FirstLoadListeners
 let init_called = false
@@ -115,13 +112,15 @@ const H: HighlightPublicInterface = {
 			}
 			init_called = true
 
-			script = document.createElement('script')
-			var scriptSrc = options?.scriptUrl
-				? options.scriptUrl
-				: `https://static.highlight.io/v${firstloadVersion}/index.js`
-			script.setAttribute('src', scriptSrc)
-			script.setAttribute('type', 'text/javascript')
-			document.getElementsByTagName('head')[0].appendChild(script)
+			import('@highlight-run/client').then(async ({ Highlight }) => {
+				highlight_obj = new Highlight(
+					client_options,
+					first_load_listeners,
+				)
+				if (!options?.manualStart) {
+					await highlight_obj.initialize()
+				}
+			})
 
 			const client_options: HighlightClassOptions = {
 				organizationID: projectID,
@@ -135,10 +134,11 @@ const H: HighlightPublicInterface = {
 				disableSessionRecording: options?.disableSessionRecording,
 				reportConsoleErrors: options?.reportConsoleErrors,
 				consoleMethodsToRecord: options?.consoleMethodsToRecord,
-				enableSegmentIntegration: options?.enableSegmentIntegration,
 				privacySetting: options?.privacySetting,
+				enableSegmentIntegration: options?.enableSegmentIntegration,
 				enableCanvasRecording: options?.enableCanvasRecording,
 				enablePerformanceRecording: options?.enablePerformanceRecording,
+				enablePromisePatch: options?.enablePromisePatch,
 				samplingStrategy: options?.samplingStrategy,
 				inlineImages: options?.inlineImages,
 				inlineStylesheet: options?.inlineStylesheet,
@@ -158,30 +158,6 @@ const H: HighlightPublicInterface = {
 				// listeners over for client to manage
 				first_load_listeners.startListening()
 			}
-			script.addEventListener('load', () => {
-				const startFunction = () => {
-					highlight_obj = new window.HighlightIO(
-						client_options,
-						first_load_listeners,
-					)
-					if (!options?.manualStart) {
-						highlight_obj.initialize()
-					}
-				}
-
-				if ('HighlightIO' in window) {
-					startFunction()
-				} else {
-					const start = () => {
-						if ('HighlightIO' in window) {
-							startFunction()
-						} else {
-							setTimeout(start, READY_WAIT_LOOP_MS)
-						}
-					}
-					start()
-				}
-			})
 
 			if (
 				!options?.integrations?.mixpanel?.disabled &&
@@ -243,6 +219,21 @@ const H: HighlightPublicInterface = {
 					JSON.stringify(payload),
 				),
 			)
+		} catch (e) {
+			HighlightWarning('error', e)
+		}
+	},
+	consume: (
+		error: Error,
+		opts: {
+			message?: string
+			payload?: object
+			source?: string
+			type?: ErrorMessageType
+		},
+	) => {
+		try {
+			H.onHighlightReady(() => highlight_obj.consumeError(error, opts))
 		} catch (e) {
 			HighlightWarning('error', e)
 		}
@@ -411,6 +402,9 @@ const H: HighlightPublicInterface = {
 				}
 			})
 		})
+	},
+	getRecordingState: () => {
+		return highlight_obj.state
 	},
 	onHighlightReady: async (func, options) => {
 		onHighlightReadyQueue.push({ options, func })

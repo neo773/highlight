@@ -1,9 +1,9 @@
-import './__generated/antd.css'
-import '@highlight-run/rrweb/dist/rrweb.min.css'
 import '@fontsource/poppins'
 import '@highlight-run/ui/styles.css'
 import './index.css'
 import './style/tailwind.css'
+import './__generated/antd.css'
+import 'rrweb/dist/rrweb.min.css'
 
 import { ApolloError, ApolloProvider } from '@apollo/client'
 import { AuthContextProvider, AuthRole } from '@authentication/AuthContext'
@@ -43,10 +43,11 @@ import {
 	useLocation,
 	useNavigate,
 } from 'react-router-dom'
+import { Toaster } from 'sonner'
 import { QueryParamProvider } from 'use-query-params'
 import { ReactRouter6Adapter } from 'use-query-params/adapters/react-router-6'
 
-import { AUTH_MODE, PUBLIC_GRAPH_URI } from '@/constants'
+import { PUBLIC_GRAPH_URI } from '@/constants'
 import { SIGN_IN_ROUTE } from '@/pages/Auth/AuthRouter'
 import { authRedirect } from '@/pages/Auth/utils'
 import { onlyAllowHighlightStaff } from '@/util/authorization/authorizationUtils'
@@ -124,8 +125,6 @@ const options: HighlightOptions = {
 }
 const favicon = document.querySelector("link[rel~='icon']") as any
 if (dev) {
-	options.scriptUrl = 'http://localhost:8080/dist/index.js'
-
 	options.integrations = undefined
 
 	const sampleEnvironmentNames = ['john', 'jay', 'anthony', 'cameron', 'boba']
@@ -140,21 +139,14 @@ if (dev) {
 	}
 } else if (
 	window.location.href.includes('onrender') ||
-	window.location.href.includes('preview')
+	window.location.href.includes('preview') ||
+	shouldDebugLog
 ) {
 	if (favicon) {
 		favicon.href = `/favicon-pr.ico`
 	}
 	window.document.title = `📸 ${window.document.title}`
 	options.environment = 'Pull Request Preview'
-	options.scriptUrl = `https://static.highlight.io/dev-${
-		import.meta.env.REACT_APP_COMMIT_SHA
-	}/index.js`
-}
-if (import.meta.env.CYPRESS_CLIENT_VERSION) {
-	options.scriptUrl = `https://static.highlight.io/${
-		import.meta.env.CYPRESS_CLIENT_VERSION
-	}/index.js`
 }
 H.init(import.meta.env.REACT_APP_FRONTEND_ORG ?? 1, options)
 analytics.track('attribution', getAttributionData())
@@ -184,6 +176,7 @@ const App = () => {
 						}}
 					>
 						<LoadingPage />
+						<Toaster />
 						<BrowserRouter>
 							<QueryParamProvider
 								adapter={ReactRouter6Adapter}
@@ -285,14 +278,6 @@ const AuthenticationRoleRouter = () => {
 	const firebaseInitialized = useRef(false)
 	const isAuthLoading = authRole === AuthRole.LOADING
 	const isLoggedIn = authRole === AuthRole.AUTHENTICATED
-
-	useEffect(() => {
-		const hasPasswordAuthorization = sessionStorage.getItem('passwordToken')
-		if (AUTH_MODE === 'password' && !hasPasswordAuthorization) {
-			auth.signOut()
-			navigate('/sign_in')
-		}
-	}, [navigate])
 
 	useEffect(() => {
 		if (adminData && user) {

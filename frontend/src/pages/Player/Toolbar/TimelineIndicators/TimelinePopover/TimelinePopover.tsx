@@ -29,6 +29,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 
+import {
+	RelatedError,
+	useRelatedResource,
+} from '@/components/RelatedResources/hooks'
+
 import style from './TimelinePopover.module.css'
 
 interface Props {
@@ -42,8 +47,7 @@ const TimelinePopover = ({ bucket }: Props) => {
 	const navigate = useNavigate()
 	const location = useLocation()
 
-	const { setActiveError, setActiveEvent, setRightPanelView } =
-		usePlayerUIContext()
+	const { setActiveEvent, setRightPanelView } = usePlayerUIContext()
 	const {
 		setCurrentEvent,
 		pause,
@@ -56,8 +60,16 @@ const TimelinePopover = ({ bucket }: Props) => {
 		setSelectedDevToolsTab,
 		setSelectedRightPlayerPanelTab,
 	} = usePlayerConfiguration()
-
-	const { activeError } = usePlayerUIContext()
+	const { resource, set } = useRelatedResource()
+	const relatedError = resource as RelatedError | undefined
+	const activeError = useMemo(
+		() =>
+			errors.find(
+				(error) =>
+					error.error_group_secure_id === relatedError?.secureId,
+			),
+		[errors, relatedError?.secureId],
+	)
 
 	const [selectedType, setSelectedType] = useState<string | null>(null)
 
@@ -107,15 +119,16 @@ const TimelinePopover = ({ bucket }: Props) => {
 			})
 			setShowRightPanel(true)
 			setSelectedRightPlayerPanelTab(RightPlayerPanelTabType.Comments)
-			setActiveError(undefined)
 		} else if (type === 'Errors') {
 			setSelectedDevToolsTab(Tab.Errors)
 			const { errorId } = deserializeErrorIdentifier(identifier)
 			const error = errors.find((error) => error.id === errorId)
 			if (error) {
-				setShowRightPanel(true)
-				setActiveError(error)
-				setRightPanelView(RightPanelView.Error)
+				set({
+					type: 'error',
+					secureId: error.error_group_secure_id,
+					instanceId: error.id,
+				})
 			}
 		} else {
 			const event = eventsForTimelineIndicator.find(
@@ -123,7 +136,6 @@ const TimelinePopover = ({ bucket }: Props) => {
 			)
 			setShowRightPanel(true)
 			setSelectedRightPlayerPanelTab(RightPlayerPanelTabType.Events)
-			setActiveError(undefined)
 			setCurrentEvent(identifier)
 			setActiveEvent(event)
 			setRightPanelView(RightPanelView.Event)

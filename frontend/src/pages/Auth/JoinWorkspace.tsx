@@ -1,8 +1,8 @@
-import { Form, Stack, Text, useFormStore } from '@highlight-run/ui/components'
+import { Form, Stack, Text } from '@highlight-run/ui/components'
+import useLocalStorage from '@rehooks/local-storage'
 import { message } from 'antd'
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useLocalStorage } from 'react-use'
 
 import { getEmailDomain } from '@/components/AutoJoinEmailsInput'
 import { Button } from '@/components/Button'
@@ -44,7 +44,7 @@ export const JoinWorkspace = () => {
 		false,
 	)
 
-	const formStore = useFormStore({
+	const formStore = Form.useStore({
 		defaultValues: {
 			workspaceId: '',
 		},

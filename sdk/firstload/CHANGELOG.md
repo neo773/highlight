@@ -1,5 +1,105 @@
 # highlight.run
 
+## 8.12.3
+
+### Patch Changes
+
+-   2ea916328: Fix duplicate network requests when performance.clearResourceTimings has been monkeypatched by external libraries
+-   11fe2921b: export highlight state on sdk
+
+## 8.12.2
+
+### Patch Changes
+
+-   8899ee039: report additional metadata on error boundary exceptions
+
+## 8.12.1
+
+### Patch Changes
+
+-   926c3a1d7: fix rrweb merge conflict breaking canvas recording
+
+## 8.12.0
+
+### Minor Changes
+
+-   b27a0bcd2: update rrweb version to 729361e
+
+## 8.11.1
+
+### Patch Changes
+
+-   4ecafffe6: fix xhr monkeypatch breaking for URL objects
+
+## 8.11.0
+
+### Minor Changes
+
+-   4574c8dfa: lazy load client bundle from node modules to avoid ad blockers
+
+## 8.10.1
+
+### Patch Changes
+
+-   bd410081e: switch replay to using highlight backend for font cors proxying
+
+## 8.10.0
+
+### Minor Changes
+
+-   112fa2ced: Fix bug with recording traces.
+
+## 8.9.1
+
+### Patch Changes
+
+-   3528f2de7: support sonner by disabling promise monkeypatching
+
+## 8.9.0
+
+### Minor Changes
+
+-   f45323273: Update websocket events to use absolute timestamps. Remove relative timestamps from all requests.
+
+## 8.8.0
+
+### Minor Changes
+
+-   23a01e3d6: update rrweb to pr-1352
+
+### Patch Changes
+
+-   6a8151dc3: fix console log serialization
+
+## 8.7.1
+
+### Patch Changes
+
+-   31486ce41: Deep stringify network request and response bodies
+
+## 8.7.0
+
+### Minor Changes
+
+-   e2483b6c3: inline stylesheets by default
+
+## 8.6.0
+
+### Minor Changes
+
+-   58ad9560f: support custom serialization for log attributes to display cleaner message bodies
+
+### Patch Changes
+
+-   ed3ff4752: filter network request recording for highlight.io traffic
+-   9796ef086: report browser performance events as metrics
+
+## 8.5.0
+
+### Minor Changes
+
+-   102710b30: Make improvements to `requestResponseSanitizer` method to pass function in a body converted to json instead of a string.
+
 ## 8.4.1
 
 ### Patch Changes

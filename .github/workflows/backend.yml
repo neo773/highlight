@@ -12,9 +12,9 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
             - name: Setup Go
-              uses: actions/setup-go@v4
+              uses: actions/setup-go@v5
               with:
                   go-version-file: 'backend/go.mod'
                   cache-dependency-path: 'backend/go.sum'
@@ -24,9 +24,9 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
             - name: Setup Go
-              uses: actions/setup-go@v4
+              uses: actions/setup-go@v5
               with:
                   go-version-file: 'backend/go.mod'
                   cache-dependency-path: 'backend/go.sum'
@@ -39,7 +39,7 @@ jobs:
             - name: Check for logrus without context
               run: if [ "$(grep --exclude-dir migrations --exclude main.go --exclude recovery.go --exclude logging.go -rE '\s+log\.(Debug|Info|Warn|Error|Fatal)' ./backend | grep -v 'WithContext' | grep -v 'Level' | wc -l)" -gt 0 ]; then grep --exclude-dir migrations --exclude main.go --exclude recovery.go --exclude logging.go -rE '\s+log\.(Debug|Info|Warn|Error|Fatal)' ./backend | grep -v 'WithContext' | grep -v 'Level' && exit 1; fi
             - name: Run linter
-              uses: golangci/golangci-lint-action@v3
+              uses: golangci/golangci-lint-action@v4
               with:
                   args: -v --config ./.golangci.yml
                   working-directory: backend
@@ -50,9 +50,9 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
             - name: Setup Go
-              uses: actions/setup-go@v4
+              uses: actions/setup-go@v5
               with:
                   go-version-file: 'backend/go.mod'
                   cache-dependency-path: 'backend/go.sum'
@@ -77,9 +77,9 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
             - name: Setup Go
-              uses: actions/setup-go@v4
+              uses: actions/setup-go@v5
               with:
                   go-version-file: 'backend/go.mod'
                   cache-dependency-path: 'backend/go.sum'
@@ -126,9 +126,9 @@ jobs:
             ENVIRONMENT: 'test'
         steps:
             - name: Checkout
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
             - name: Setup Go
-              uses: actions/setup-go@v4
+              uses: actions/setup-go@v5
               with:
                   go-version-file: 'backend/go.mod'
                   cache-dependency-path: 'backend/go.sum'

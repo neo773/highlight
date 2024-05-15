@@ -2,8 +2,8 @@ import {
 	addCustomEvent as rrwebAddCustomEvent,
 	getRecordSequentialIdPlugin,
 	record,
-} from '@highlight-run/rrweb'
-import { eventWithTime, listenerHandler } from '@highlight-run/rrweb-types'
+} from 'rrweb'
+import { eventWithTime, listenerHandler } from '@rrweb/types'
 import { FirstLoadListeners } from './listeners/first-load-listeners'
 import {
 	AmplitudeIntegrationOptions,
@@ -67,7 +67,7 @@ import { ReplayEventsInput } from './graph/generated/schemas'
 import { MessageType, PropertyType, Source } from './workers/types'
 import { Logger } from './logger'
 import { HighlightFetchWindow } from './listeners/network-listener/utils/fetch-listener'
-import { ConsoleMessage } from './types/shared-types'
+import { ConsoleMessage, ErrorMessageType } from './types/shared-types'
 import { RequestResponsePair } from './listeners/network-listener/utils/models'
 import {
 	JankListener,
@@ -101,10 +101,11 @@ export type HighlightClassOptions = {
 	disableSessionRecording?: boolean
 	reportConsoleErrors?: boolean
 	consoleMethodsToRecord?: ConsoleMethods[]
-	enableSegmentIntegration?: boolean
 	privacySetting?: PrivacySettingOption
+	enableSegmentIntegration?: boolean
 	enableCanvasRecording?: boolean
 	enablePerformanceRecording?: boolean
+	enablePromisePatch?: boolean
 	samplingStrategy?: SamplingStrategy
 	inlineImages?: boolean
 	inlineStylesheet?: boolean
@@ -362,7 +363,7 @@ export class Highlight {
 			options.enablePerformanceRecording ?? true
 		// default to inlining stylesheets/images locally to help with recording accuracy
 		this.inlineImages = options.inlineImages ?? this._isOnLocalHost
-		this.inlineStylesheet = options.inlineStylesheet ?? this._isOnLocalHost
+		this.inlineStylesheet = options.inlineStylesheet ?? true
 		this.samplingStrategy = {
 			canvasFactor: 0.5,
 			canvasMaxSnapshotDimension: 360,
@@ -397,10 +398,6 @@ export class Highlight {
 			this.organizationID = options.organizationID
 		} else {
 			this.organizationID = options.organizationID.toString()
-		}
-		// disable inline stylesheets for aerotime
-		if (this.organizationID === 'jgoqo9el') {
-			this.inlineStylesheet = false
 		}
 		this.isRunningOnHighlight =
 			this.organizationID === '1' || this.organizationID === '1jdkoe52'
@@ -458,43 +455,55 @@ export class Highlight {
 		})
 	}
 
-	async pushCustomError(message: string, payload?: string) {
-		const result = await StackTrace.get()
-		const frames = result.slice(1)
-		this._firstLoadListeners.errors.push({
-			event: message,
-			type: 'custom',
-			url: window.location.href,
-			source: frames[0].fileName ?? '',
-			lineNumber: frames[0].lineNumber ?? 0,
-			columnNumber: frames[0].columnNumber ?? 0,
-			stackTrace: frames,
-			timestamp: new Date().toISOString(),
-			payload: payload,
+	pushCustomError(message: string, payload?: string) {
+		return this.consumeCustomError(new Error(message), undefined, payload)
+	}
+
+	consumeCustomError(error: Error, message?: string, payload?: string) {
+		let obj = {}
+		if (payload) {
+			try {
+				obj = { ...JSON.parse(payload), ...obj }
+			} catch (e) {}
+		}
+		return this.consumeError(error, {
+			message,
+			payload: obj,
 		})
 	}
 
-	async consumeCustomError(error: Error, message?: string, payload?: string) {
+	consumeError(
+		error: Error,
+		{
+			message,
+			payload,
+			source,
+			type,
+		}: {
+			message?: string
+			payload?: object
+			source?: string
+			type?: ErrorMessageType
+		},
+	) {
 		if (error.cause) {
-			let obj = { 'exception.cause': error.cause }
-			if (payload) {
-				try {
-					obj = { ...JSON.parse(payload), ...obj }
-				} catch (e) {}
-			}
-			payload = JSON.stringify(obj)
+			payload = { ...payload, 'exception.cause': error.cause }
+		}
+		let event = message ? message + ':' + error.message : error.message
+		if (type === 'React.ErrorBoundary') {
+			event = 'ErrorBoundary: ' + event
 		}
 		const res = ErrorStackParser.parse(error)
 		this._firstLoadListeners.errors.push({
-			event: message ? message + ':' + error.message : error.message,
-			type: 'custom',
+			event,
+			type: type ?? 'custom',
 			url: window.location.href,
-			source: '',
+			source: source ?? '',
 			lineNumber: res[0]?.lineNumber ? res[0]?.lineNumber : 0,
 			columnNumber: res[0]?.columnNumber ? res[0]?.columnNumber : 0,
 			stackTrace: res,
 			timestamp: new Date().toISOString(),
-			payload: payload,
+			payload: JSON.stringify(payload),
 		})
 	}
 
@@ -760,7 +769,7 @@ SessionSecureID: ${this.sessionData.sessionSecureID}`,
 									.canvasMaxSnapshotDimension,
 						},
 					},
-					keepIframeSrcFn: (_src) => {
+					keepIframeSrcFn: (_src: string) => {
 						return !this.options.recordCrossOriginIframe
 					},
 					inlineImages: this.inlineImages,
@@ -1033,6 +1042,26 @@ SessionSecureID: ${this.sessionData.sessionSecureID}`,
 				this.listeners.push(
 					PerformanceListener((payload: PerformancePayload) => {
 						this.addCustomEvent('Performance', stringify(payload))
+						this.recordMetric(
+							Object.entries(payload)
+								.map(([name, value]) =>
+									value
+										? {
+												name,
+												value,
+												category:
+													MetricCategory.Performance,
+												group: window.location.href,
+										  }
+										: undefined,
+								)
+								.filter((m) => m) as {
+								name: string
+								value: any
+								category: MetricCategory
+								group: string
+							}[],
+						)
 					}, this._recordingStartTime),
 				)
 				this.listeners.push(
@@ -1429,8 +1458,6 @@ SessionSecureID: ${this.sessionData.sessionSecureID}`,
 		this._lastSnapshotTime = new Date().getTime()
 	}
 }
-
-;(window as any).HighlightIO = Highlight
 
 interface HighlightWindow extends Window {
 	Highlight: Highlight

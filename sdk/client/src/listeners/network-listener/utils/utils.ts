@@ -48,13 +48,47 @@ const sanitizeRequestResponsePair = (
 		requestResponseSanitizer,
 	}: SanitizeOptions,
 ): RequestResponsePair | null => {
+	// body keys are already be redacted at this point (see getBodyThatShouldBeRecorded)
 	let sanitizedPair: RequestResponsePair | null = pair
 
 	// step 1: pass through user defined sanitizer
 	if (requestResponseSanitizer) {
+		let stringifyRequestBody = true
+		try {
+			sanitizedPair.request.body = JSON.parse(sanitizedPair.request.body)
+		} catch (err) {
+			stringifyRequestBody = false
+		}
+
+		let stringifyResponseBody = true
+		try {
+			sanitizedPair.response.body = JSON.parse(
+				sanitizedPair.response.body,
+			)
+		} catch (err) {
+			stringifyResponseBody = false
+		}
+
 		try {
 			sanitizedPair = requestResponseSanitizer(sanitizedPair)
-		} catch (err) {}
+		} catch (err) {
+		} finally {
+			stringifyRequestBody =
+				stringifyRequestBody && !!sanitizedPair?.request?.body
+			stringifyResponseBody =
+				stringifyResponseBody && !!sanitizedPair?.response?.body
+
+			if (stringifyRequestBody) {
+				sanitizedPair!.request.body = JSON.stringify(
+					sanitizedPair!.request.body,
+				)
+			}
+			if (stringifyResponseBody) {
+				sanitizedPair!.response.body = JSON.stringify(
+					sanitizedPair!.response.body,
+				)
+			}
+		}
 
 		if (!sanitizedPair) {
 			return null
@@ -172,9 +206,6 @@ export const matchPerformanceTimingsWithRequestResponsePair = (
 				performanceTiming.toJSON = function () {
 					return {
 						initiatorType: this.initiatorType,
-						// deprecated, use the absolute versions instead
-						startTime: this.startTime,
-						responseEnd: this.responseEnd,
 						// offset by `window.performance.timeOrigin` to get absolute timestamps
 						startTimeAbs:
 							window.performance.timeOrigin + this.startTime,
@@ -202,9 +233,9 @@ const isHighlightNetworkResourceFilter = (name: string, backendUrl: string) =>
 	name
 		.toLocaleLowerCase()
 		.includes(
-			import.meta.env.REACT_APP_PUBLIC_GRAPH_URI ?? 'highlight.run',
+			import.meta.env.REACT_APP_PUBLIC_GRAPH_URI ?? 'highlight.io',
 		) ||
-	name.toLocaleLowerCase().includes('highlight.run') ||
+	name.toLocaleLowerCase().includes('highlight.io') ||
 	name.toLocaleLowerCase().includes(backendUrl)
 
 export const shouldNetworkRequestBeRecorded = (

@@ -3,9 +3,10 @@ package clickhouse
 import (
 	"context"
 	"fmt"
-	"github.com/highlight-run/highlight/backend/parser"
 	"testing"
 	"time"
+
+	"github.com/highlight-run/highlight/backend/parser"
 
 	modelInputs "github.com/highlight-run/highlight/backend/private-graph/graph/model"
 	"github.com/highlight-run/highlight/backend/util"
@@ -43,7 +44,6 @@ func TestWriteSession(t *testing.T) {
 		Identified:                     false,
 		Fingerprint:                    0,
 		Identifier:                     "",
-		OrganizationID:                 0,
 		ProjectID:                      0,
 		Email:                          new(string),
 		IP:                             "",
@@ -96,7 +96,6 @@ func TestWriteSession(t *testing.T) {
 		ViewedByAdmins:                 []model.Admin{},
 		Chunked:                        new(bool),
 		ProcessWithRedis:               false,
-		AvoidPostgresStorage:           false,
 		Normalness:                     new(float64),
 	}}))
 }
@@ -261,7 +260,7 @@ func Test_QuerySessionIds(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ids, total, sampleRuleFound, err := client.QuerySessionIds(ctx, nil, 1, 10, tc.Query, "CreatedAt DESC, ID DESC", pointy.Int(1), time.Now().Add(-time.Hour))
+			ids, total, sampleRuleFound, err := client.QuerySessionIdsDeprecated(ctx, nil, 1, 10, tc.Query, "CreatedAt DESC, ID DESC", pointy.Int(1), time.Now().Add(-time.Hour))
 			assert.NoError(t, err)
 			assert.True(t, sampleRuleFound)
 			assert.Greater(t, total, int64(0))

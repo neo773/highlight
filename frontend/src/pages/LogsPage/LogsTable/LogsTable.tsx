@@ -31,24 +31,23 @@ import {
 	flexRender,
 	getCoreRowModel,
 	getExpandedRowModel,
+	Row,
 	useReactTable,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { isEqual } from 'lodash'
 import React, { Key, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
 	ColumnHeader,
 	CustomColumnHeader,
 } from '@/components/CustomColumnHeader'
+import { findMatchingAttributes } from '@/components/JsonViewer/utils'
 import { SearchExpression } from '@/components/Search/Parser/listener'
-import { parseSearch } from '@/components/Search/utils'
-import { useGetLogsKeysLazyQuery } from '@/graph/generated/hooks'
-import { LogEdge } from '@/graph/generated/schemas'
-import { findMatchingLogAttributes } from '@/pages/LogsPage/utils'
+import { LogEdge, ProductType } from '@/graph/generated/schemas'
+import { MAX_LOGS } from '@/pages/LogsPage/useGetLogs'
 import analytics from '@/util/analytics'
 
-import { LogDetails, LogValue } from './LogDetails'
+import { LogDetails } from './LogDetails'
 import * as styles from './LogsTable.css'
 
 type Props = {
@@ -118,8 +117,9 @@ export const LogsTable = (props: Props) => {
 type LogsTableInnerProps = {
 	loadingAfter: boolean
 	logEdges: LogEdgeWithResources[]
-	query: string
 	selectedCursor: string | undefined
+	query: string
+	queryParts: SearchExpression[]
 	fetchMoreWhenScrolled: (target: HTMLDivElement) => void
 	// necessary for loading most recent loads
 	moreLogs?: number
@@ -135,8 +135,9 @@ const LOADING_AFTER_HEIGHT = 28
 const LogsTableInner = ({
 	logEdges,
 	loadingAfter,
-	query,
 	selectedCursor,
+	query,
+	queryParts,
 	moreLogs,
 	bodyHeight,
 	clearMoreLogs,
@@ -149,7 +150,6 @@ const LogsTableInner = ({
 	const enableFetchMoreLogs =
 		!!moreLogs && !!clearMoreLogs && !!handleAdditionalLogsDateChange
 
-	const { queryParts } = parseSearch(query)
 	const [expanded, setExpanded] = useState<ExpandedState>({})
 
 	const columnHelper = createColumnHelper<LogEdge>()
@@ -215,11 +215,11 @@ const LogsTableInner = ({
 				noPadding: true,
 				component: (
 					<CustomColumnPopover
+						productType={ProductType.Logs}
 						selectedColumns={selectedColumns}
 						setSelectedColumns={setSelectedColumns}
 						standardColumns={HIGHLIGHT_STANDARD_COLUMNS}
 						attributePrefix="logAttributes"
-						getKeysLazyQuery={useGetLogsKeysLazyQuery}
 					/>
 				),
 			})
@@ -331,6 +331,7 @@ const LogsTableInner = ({
 					<Table.Row>
 						<Box width="full">
 							<AdditionalFeedResults
+								maxResults={MAX_LOGS}
 								more={moreLogs}
 								type="logs"
 								onClick={() => {
@@ -347,6 +348,7 @@ const LogsTableInner = ({
 				overflowY="auto"
 				style={{ height: bodyHeight }}
 				onScroll={handleFetchMoreWhenScrolled}
+				hiddenScroll
 			>
 				{paddingTop > 0 && <Box style={{ height: paddingTop }} />}
 				{virtualRows.map((virtualRow) => {
@@ -389,7 +391,7 @@ export const IconCollapsed: React.FC = () => (
 )
 
 type LogsTableRowProps = {
-	row: any
+	row: Row<LogEdgeWithResources>
 	rowVirtualizer: any
 	expanded: boolean
 	virtualRowKey: Key
@@ -397,98 +399,77 @@ type LogsTableRowProps = {
 	gridColumns: string[]
 }
 
-const LogsTableRow = React.memo<LogsTableRowProps>(
-	({
-		row,
-		rowVirtualizer,
-		expanded,
-		virtualRowKey,
-		queryParts,
-		gridColumns,
-	}) => {
-		const attributesRow = (row: any) => {
-			const log = row.original.node
-			const rowExpanded = row.getIsExpanded()
+const LogsTableRow: React.FC<LogsTableRowProps> = ({
+	row,
+	rowVirtualizer,
+	expanded,
+	virtualRowKey,
+	queryParts,
+	gridColumns,
+}) => {
+	const attributesRow = (row: LogsTableRowProps['row']) => {
+		const log = row.original.node
+		const rowExpanded = row.getIsExpanded()
 
-			const matchedAttributes = findMatchingLogAttributes(queryParts, {
-				...log.logAttributes,
-				environment: log.environment,
-				level: log.level,
-				message: log.message,
-				secure_session_id: log.secureSessionID,
-				service_name: log.serviceName,
-				service_version: log.serviceVersion,
-				source: log.source,
-				span_id: log.spanID,
-				trace_id: log.traceID,
-			})
-			const hasAttributes = Object.entries(matchedAttributes).length > 0
+		const matchedAttributes = findMatchingAttributes(queryParts, {
+			...log.logAttributes,
+			environment: log.environment,
+			level: log.level,
+			message: log.message,
+			secure_session_id: log.secureSessionID,
+			service_name: log.serviceName,
+			service_version: log.serviceVersion,
+			source: log.source,
+			span_id: log.spanID,
+			trace_id: log.traceID,
+		})
 
-			return (
-				<Table.Row selected={expanded} className={styles.attributesRow}>
-					{(rowExpanded || hasAttributes) && (
-						<Table.Cell py="4" pl="32">
-							{!rowExpanded && (
-								<Box>
-									{Object.entries(matchedAttributes).map(
-										([key, { match, value }]) => {
-											return (
-												<LogValue
-													key={key}
-													label={key}
-													value={value}
-													queryKey={key}
-													queryMatch={match}
-													queryParts={queryParts}
-												/>
-											)
-										},
-									)}
-								</Box>
-							)}
+		return (
+			<Table.Row
+				selected={expanded}
+				className={styles.attributesRow}
+				gridColumns={['32px', '1fr']}
+			>
+				{rowExpanded && (
+					<>
+						<Table.Cell py="4" />
+						<Table.Cell py="4" borderTop="dividerWeak">
 							<LogDetails
 								matchedAttributes={matchedAttributes}
 								row={row}
 								queryParts={queryParts}
 							/>
 						</Table.Cell>
-					)}
-				</Table.Row>
-			)
-		}
+					</>
+				)}
+			</Table.Row>
+		)
+	}
 
-		return (
-			<div
-				key={virtualRowKey}
-				data-index={virtualRowKey}
-				ref={rowVirtualizer.measureElement}
+	return (
+		<div
+			key={virtualRowKey}
+			data-index={virtualRowKey}
+			ref={rowVirtualizer.measureElement}
+		>
+			<Table.Row
+				gridColumns={gridColumns}
+				onClick={row.getToggleExpandedHandler()}
+				selected={expanded}
+				className={styles.dataRow}
 			>
-				<Table.Row
-					gridColumns={gridColumns}
-					onClick={row.getToggleExpandedHandler()}
-					selected={expanded}
-					className={styles.dataRow}
-				>
-					{row.getVisibleCells().map((cell: any) => {
-						return (
-							<React.Fragment key={cell.column.id}>
-								{flexRender(
-									cell.column.columnDef.cell,
-									cell.getContext(),
-								)}
-							</React.Fragment>
-						)
-					})}
-				</Table.Row>
-				{attributesRow(row)}
-			</div>
-		)
-	},
-	(prevProps, nextProps) => {
-		return (
-			prevProps.expanded === nextProps.expanded &&
-			prevProps.virtualRowKey === nextProps.virtualRowKey &&
-			isEqual(prevProps.gridColumns, nextProps.gridColumns)
-		)
-	},
-)
+				{row.getVisibleCells().map((cell: any) => {
+					return (
+						<React.Fragment key={cell.column.id}>
+							{flexRender(
+								cell.column.columnDef.cell,
+								cell.getContext(),
+							)}
+						</React.Fragment>
+					)
+				})}
+			</Table.Row>
+			{attributesRow(row)}
+		</div>
+	)
+}

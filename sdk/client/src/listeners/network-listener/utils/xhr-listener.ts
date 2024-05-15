@@ -1,3 +1,5 @@
+import stringify from 'json-stringify-safe'
+
 import { NetworkListenerCallback } from '../network-listener'
 import { Headers, Request, RequestResponsePair, Response } from './models'
 import {
@@ -37,12 +39,16 @@ export const XHRListener = (
 	/**
 	 * When a request gets initiated, store metadata for that specific request.
 	 */
-	XHR.open = function (this: BrowserXHR, method: string, url: string) {
+	XHR.open = function (this: BrowserXHR, method: string, url: string | URL) {
+		if (typeof url === 'string') {
+			this._url = url
+		} else {
+			this._url = url.toString()
+		}
 		this._method = method
-		this._url = url
 		this._requestHeaders = {}
 		this._shouldRecordHeaderAndBody = !urlBlocklist.some((blockedUrl) =>
-			url.toLowerCase().includes(blockedUrl),
+			this._url.toLowerCase().includes(blockedUrl),
 		)
 
 		// @ts-expect-error
@@ -237,7 +243,7 @@ const getBodyData = (postData: any, url: string | undefined) => {
 		typeof postData === 'number' ||
 		typeof postData === 'boolean'
 	) {
-		return postData.toString()
+		return stringify(postData)
 	}
 
 	return null
@@ -276,11 +282,27 @@ export const getBodyThatShouldBeRecorded = (
 			try {
 				const json = JSON.parse(bodyData)
 
-				Object.keys(json).forEach((key) => {
-					if (bodyKeysToRedact.includes(key.toLocaleLowerCase())) {
-						json[key] = '[REDACTED]'
-					}
-				})
+				if (Array.isArray(json)) {
+					json.forEach((element) => {
+						Object.keys(element).forEach((key) => {
+							if (
+								bodyKeysToRedact.includes(
+									key.toLocaleLowerCase(),
+								)
+							) {
+								element[key] = '[REDACTED]'
+							}
+						})
+					})
+				} else {
+					Object.keys(json).forEach((key) => {
+						if (
+							bodyKeysToRedact.includes(key.toLocaleLowerCase())
+						) {
+							json[key] = '[REDACTED]'
+						}
+					})
+				}
 
 				bodyData = JSON.stringify(json)
 			} catch {}

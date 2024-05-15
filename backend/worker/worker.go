@@ -297,22 +297,6 @@ func (w *Worker) scanSessionPayload(ctx context.Context, manager *payload.Payloa
 	return nil
 }
 
-func (w *Worker) getSessionID(ctx context.Context, sessionSecureID string) (id int, err error) {
-	s, _ := util.StartSpanFromContext(ctx, "getSessionID", util.ResourceName("worker.getSessionID"))
-	s.SetAttribute("secure_id", sessionSecureID)
-	defer s.Finish()
-	if sessionSecureID == "" {
-		return 0, e.New("getSessionID called with no secure id")
-	}
-	session := &model.Session{}
-	w.Resolver.DB.Select("id").Where(&model.Session{SecureID: sessionSecureID}).Take(&session)
-	if session.ID == 0 {
-		return 0, e.New(fmt.Sprintf("no session found for secure id: '%s'", sessionSecureID))
-	}
-	id = session.ID
-	return
-}
-
 func (w *Worker) processPublicWorkerMessage(ctx context.Context, task *kafkaqueue.Message) error {
 	switch task.Type {
 	case kafkaqueue.PushPayload:
@@ -375,11 +359,7 @@ func (w *Worker) processPublicWorkerMessage(ctx context.Context, task *kafkaqueu
 		if task.AddTrackProperties == nil {
 			break
 		}
-		sessionID, err := w.getSessionID(ctx, task.AddTrackProperties.SessionSecureID)
-		if err != nil {
-			return err
-		}
-		if err := w.PublicResolver.AddTrackPropertiesImpl(ctx, sessionID, task.AddTrackProperties.PropertiesObject); err != nil {
+		if err := w.PublicResolver.AddTrackPropertiesImpl(ctx, task.AddTrackProperties.SessionSecureID, task.AddTrackProperties.PropertiesObject); err != nil {
 			log.WithContext(ctx).WithError(err).WithField("type", task.Type).Error("failed to process task")
 			return err
 		}
@@ -387,11 +367,7 @@ func (w *Worker) processPublicWorkerMessage(ctx context.Context, task *kafkaqueu
 		if task.AddSessionProperties == nil {
 			break
 		}
-		sessionID, err := w.getSessionID(ctx, task.AddSessionProperties.SessionSecureID)
-		if err != nil {
-			return err
-		}
-		if err := w.PublicResolver.AddSessionPropertiesImpl(ctx, sessionID, task.AddSessionProperties.PropertiesObject); err != nil {
+		if err := w.PublicResolver.AddSessionPropertiesImpl(ctx, task.AddSessionProperties.SessionSecureID, task.AddSessionProperties.PropertiesObject); err != nil {
 			log.WithContext(ctx).WithError(err).WithField("type", task.Type).Error("failed to process task")
 			return err
 		}
@@ -537,31 +513,6 @@ func (w *Worker) PublicWorker(ctx context.Context, topic kafkaqueue.TopicType) {
 	wg.Wait()
 }
 
-// Delete data for any sessions created > 4 hours ago
-// if all session data has been written to s3
-func (w *Worker) DeleteCompletedSessions(ctx context.Context) {
-	lookbackPeriod := 4*60 + 10 // 4h10m
-
-	baseQuery := `
-				DELETE
-				FROM %s o
-				USING sessions s
-				WHERE o.session_id = s.id
-				AND s.object_storage_enabled = True
-				AND s.payload_updated_at < s.lock
-				AND s.created_at < NOW() - (? * INTERVAL '1 MINUTE')
-				AND s.created_at > NOW() - INTERVAL '1 WEEK'`
-
-	for _, table := range []string{"resources_objects", "messages_objects"} {
-		deleteSpan, ctx := util.StartSpanFromContext(ctx, "worker.deleteObjects",
-			util.ResourceName("worker.deleteObjects"), util.Tag("table", table))
-		if err := w.Resolver.DB.WithContext(ctx).Exec(fmt.Sprintf(baseQuery, table), lookbackPeriod).Error; err != nil {
-			log.WithContext(ctx).Error(e.Wrapf(err, "error deleting expired objects from %s", table))
-		}
-		deleteSpan.Finish()
-	}
-}
-
 // Autoresolves error groups that have not had any recent instances
 func (w *Worker) AutoResolveStaleErrors(ctx context.Context) {
 	autoResolver := NewAutoResolver(w.PublicResolver.Store, w.PublicResolver.DB)
@@ -609,14 +560,6 @@ func (w *Worker) processSession(ctx context.Context, s *model.Session) error {
 		return errors.Wrap(err, "error creating payload manager")
 	}
 	defer payloadManager.Close()
-
-	if !s.AvoidPostgresStorage {
-		// Delete any timeline indicator events which were previously written for this session
-		if err := w.Resolver.DB.WithContext(ctx).Where("session_secure_id = ?", s.SecureID).
-			Delete(&model.TimelineIndicatorEvent{}).Error; err != nil {
-			log.WithContext(ctx).Error(e.Wrap(err, "error deleting outdated timeline indicator events"))
-		}
-	}
 
 	// Delete any event chunks which were previously written for this session
 	if err := w.Resolver.DB.WithContext(ctx).Where("session_id = ?", s.ID).
@@ -669,30 +612,25 @@ func (w *Worker) processSession(ctx context.Context, s *model.Session) error {
 				Data:            parsedData,
 			})
 		}
-		if s.AvoidPostgresStorage {
-			eventBytes, err := json.Marshal(eventsForTimelineIndicator)
-			if err != nil {
-				log.WithContext(ctx).Error(e.Wrap(err, "error marshalling eventsForTimelineIndicator"))
-			}
-			if err := payloadManager.TimelineIndicatorEvents.WriteString(string(eventBytes)); err != nil {
-				log.WithContext(ctx).Error(e.Wrap(err, "error writing to TimelineIndicatorEvents"))
-			}
-			if err := payloadManager.TimelineIndicatorEvents.Close(); err != nil {
-				log.WithContext(ctx).Error(e.Wrap(err, "error closing TimelineIndicatorEvents writer"))
-			}
 
-			// Extract and save the user journey steps from the timeline indicator events
-			userJourneySteps, err := journey_handlers.GetUserJourneySteps(s.ProjectID, s.ID, eventBytes)
-			if err != nil {
-				return err
-			}
-			if err := w.Resolver.DB.WithContext(ctx).Model(&model.UserJourneyStep{}).Save(&userJourneySteps).Error; err != nil {
-				return err
-			}
-		} else {
-			if err := w.Resolver.DB.WithContext(ctx).Create(eventsForTimelineIndicator).Error; err != nil {
-				log.WithContext(ctx).Error(e.Wrap(err, "error creating events for timeline indicator"))
-			}
+		eventBytes, err := json.Marshal(eventsForTimelineIndicator)
+		if err != nil {
+			log.WithContext(ctx).Error(e.Wrap(err, "error marshalling eventsForTimelineIndicator"))
+		}
+		if err := payloadManager.TimelineIndicatorEvents.WriteString(string(eventBytes)); err != nil {
+			log.WithContext(ctx).Error(e.Wrap(err, "error writing to TimelineIndicatorEvents"))
+		}
+		if err := payloadManager.TimelineIndicatorEvents.Close(); err != nil {
+			log.WithContext(ctx).Error(e.Wrap(err, "error closing TimelineIndicatorEvents writer"))
+		}
+
+		// Extract and save the user journey steps from the timeline indicator events
+		userJourneySteps, err := journey_handlers.GetUserJourneySteps(s.ProjectID, s.ID, eventBytes)
+		if err != nil {
+			return err
+		}
+		if err := w.Resolver.DB.WithContext(ctx).Model(&model.UserJourneyStep{}).Save(&userJourneySteps).Error; err != nil {
+			return err
 		}
 	}
 
@@ -1059,7 +997,6 @@ func (w *Worker) GetSessionsToProcess(ctx context.Context, payloadLookbackPeriod
 
 // Start begins the worker's tasks.
 func (w *Worker) Start(ctx context.Context) {
-	go reportProcessSessionCount(ctx, w.Resolver.DB, pubgraph.SessionProcessDelaySeconds, pubgraph.SessionProcessLockMinutes)
 	maxWorkerCount := 10
 	wp := workerpool.New(maxWorkerCount)
 	wp.SetPanicHandler(util.Recover)
@@ -1379,8 +1316,6 @@ func (w *Worker) GetHandler(ctx context.Context, handlerFlag string) func(ctx co
 		return w.BackfillStackFrames
 	case "refresh-materialized-views":
 		return w.RefreshMaterializedViews
-	case "delete-completed-sessions":
-		return w.DeleteCompletedSessions
 	case "public-worker-main":
 		return w.GetPublicWorker(kafkaqueue.TopicTypeDefault)
 	case "public-worker-batched":
@@ -1502,7 +1437,7 @@ func processEventChunk(ctx context.Context, a EventProcessingAccumulator, events
 			var diff time.Duration
 			if !a.LastEventTimestamp.IsZero() {
 				diff = event.Timestamp.Sub(a.LastEventTimestamp)
-				if diff.Seconds() <= MIN_INACTIVE_DURATION {
+				if diff > 0 && diff.Seconds() <= MIN_INACTIVE_DURATION {
 					a.ActiveDuration += diff
 				}
 			}
@@ -1606,25 +1541,4 @@ func processEventChunk(ctx context.Context, a EventProcessingAccumulator, events
 		}
 	}
 	return a
-}
-
-func reportProcessSessionCount(ctx context.Context, db *gorm.DB, lookbackPeriod, lockPeriod int) {
-	defer util.Recover()
-	for {
-		time.Sleep(1*time.Minute + time.Duration(59*float64(time.Minute.Nanoseconds())*rand.Float64()))
-		var count int64
-		if err := db.WithContext(ctx).Raw(`
-			SELECT COUNT(*)
-			FROM sessions
-			WHERE (processed = false)
-				AND (excluded = false)
-				AND (payload_updated_at < NOW() - (? * INTERVAL '1 SECOND'))
-				AND (lock is null OR lock < NOW() - (? * INTERVAL '1 MINUTE'))
-				AND (retry_count < ?)
-			`, lookbackPeriod, lockPeriod, MAX_RETRIES).Scan(&count).Error; err != nil {
-			log.WithContext(ctx).Error(e.Wrap(err, "error getting count of sessions to process"))
-			continue
-		}
-		hmetric.Histogram(ctx, "processSessionsCount", float64(count), nil, 1)
-	}
 }

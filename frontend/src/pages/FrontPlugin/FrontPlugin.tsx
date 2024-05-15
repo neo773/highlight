@@ -2,11 +2,12 @@ import {
 	AppLoadingState,
 	useAppLoadingContext,
 } from '@context/AppLoadingContext'
-import HighlightSessions from '@pages/FrontPlugin/components/HighlightSessions'
+import { HighlightSessions } from '@pages/FrontPlugin/components/HighlightSessions'
 import { FrontContextProvider } from '@pages/FrontPlugin/Front/FrontContext'
-import React, { useEffect } from 'react'
+import { useEffect } from 'react'
 import { Helmet } from 'react-helmet'
 
+// TODO: fix this page
 const FrontPlugin = () => {
 	const { setLoadingState } = useAppLoadingContext()
 

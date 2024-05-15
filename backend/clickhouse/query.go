@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,15 +13,15 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/huandu/go-sqlbuilder"
-	"github.com/nqd/flat"
-
 	"github.com/highlight-run/highlight/backend/model"
 	"github.com/highlight-run/highlight/backend/parser"
 	"github.com/highlight-run/highlight/backend/parser/listener"
 	modelInputs "github.com/highlight-run/highlight/backend/private-graph/graph/model"
 	"github.com/highlight-run/highlight/backend/util"
 	"github.com/highlight/highlight/sdk/highlight-go"
+	"github.com/huandu/go-sqlbuilder"
+	"github.com/nqd/flat"
+	e "github.com/pkg/errors"
 )
 
 const SamplingRows = 20_000_000
@@ -33,17 +34,18 @@ type sampleableTableConfig[TReservedKey ~string] struct {
 	useSampling         func(time.Duration) bool
 }
 
-func readObjects[TObj interface{}, TReservedKey ~string](ctx context.Context, client *Client, config model.TableConfig[TReservedKey], projectID int, params modelInputs.QueryInput, pagination Pagination, scanObject func(driver.Rows) (*Edge[TObj], error)) (*Connection[TObj], error) {
+func readObjects[TObj interface{}, TReservedKey ~string](ctx context.Context, client *Client, config model.TableConfig[TReservedKey], samplingConfig model.TableConfig[TReservedKey], projectID int, params modelInputs.QueryInput, pagination Pagination, scanObject func(driver.Rows) (*Edge[TObj], error)) (*Connection[TObj], error) {
 	sb := sqlbuilder.NewSelectBuilder()
 	var err error
 	var args []interface{}
 
-	orderForward := OrderForwardNatural
-	orderBackward := OrderBackwardNatural
-	if pagination.Direction == modelInputs.SortDirectionAsc {
-		orderForward = OrderForwardInverted
-		orderBackward = OrderBackwardInverted
+	innerTableConfig := config
+	// If we have a non-default sort column use the sampling table for inner query
+	if params.Sort != nil && strings.ToLower(params.Sort.Column) != "timestamp" {
+		innerTableConfig = samplingConfig
 	}
+
+	orderForward, _ := getSortOrders[TReservedKey](sb, pagination.Direction, config, params)
 
 	outerSelect := strings.Join(config.SelectColumns, ", ")
 	innerSelect := []string{"Timestamp", "UUID"}
@@ -51,45 +53,39 @@ func readObjects[TObj interface{}, TReservedKey ~string](ctx context.Context, cl
 		// Create a "window" around the cursor
 		// https://stackoverflow.com/a/71738696
 		beforeSb, err := makeSelectBuilder(
-			config,
+			innerTableConfig,
 			innerSelect,
-			projectID,
+			[]int{projectID},
 			params,
 			Pagination{
 				Before: pagination.At,
-			},
-			orderBackward,
-			orderForward)
+			})
 		if err != nil {
 			return nil, err
 		}
 		beforeSb.Distinct().Limit(LogsLimit/2 + 1)
 
 		atSb, err := makeSelectBuilder(
-			config,
+			innerTableConfig,
 			innerSelect,
-			projectID,
+			[]int{projectID},
 			params,
 			Pagination{
 				At: pagination.At,
-			},
-			orderBackward,
-			orderForward)
+			})
 		if err != nil {
 			return nil, err
 		}
 		atSb.Distinct()
 
 		afterSb, err := makeSelectBuilder(
-			config,
+			innerTableConfig,
 			innerSelect,
-			projectID,
+			[]int{projectID},
 			params,
 			Pagination{
 				After: pagination.At,
-			},
-			orderBackward,
-			orderForward)
+			})
 		if err != nil {
 			return nil, err
 		}
@@ -104,13 +100,11 @@ func readObjects[TObj interface{}, TReservedKey ~string](ctx context.Context, cl
 			OrderBy(orderForward)
 	} else {
 		fromSb, err := makeSelectBuilder(
-			config,
+			innerTableConfig,
 			innerSelect,
-			projectID,
+			[]int{projectID},
 			params,
-			pagination,
-			orderBackward,
-			orderForward)
+			pagination)
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +122,7 @@ func readObjects[TObj interface{}, TReservedKey ~string](ctx context.Context, cl
 	sql, args := sb.BuildWithFlavor(sqlbuilder.ClickHouse)
 
 	span, _ := util.StartSpanFromContext(ctx, "clickhouse.Query")
-	span.SetAttribute("Table", config.TableName)
+	span.SetAttribute("Table", innerTableConfig.TableName)
 	span.SetAttribute("Query", sql)
 	span.SetAttribute("Params", params)
 	span.SetAttribute("db.system", "clickhouse")
@@ -159,17 +153,17 @@ func readObjects[TObj interface{}, TReservedKey ~string](ctx context.Context, cl
 func makeSelectBuilder[T ~string](
 	config model.TableConfig[T],
 	selectCols []string,
-	projectID int,
+	projectIDs []int,
 	params modelInputs.QueryInput,
 	pagination Pagination,
-	orderBackward string,
-	orderForward string,
 ) (*sqlbuilder.SelectBuilder, error) {
 	sb := sqlbuilder.NewSelectBuilder()
 
+	orderForward, orderBackward := getSortOrders[T](sb, pagination.Direction, config, params)
+
 	sb.Select(selectCols...)
 	sb.From(config.TableName)
-	sb.Where(sb.Equal("ProjectId", projectID))
+	sb.Where(sb.In("ProjectId", projectIDs))
 
 	if pagination.After != nil && len(*pagination.After) > 1 {
 		timestamp, uuid, err := decodeCursor(*pagination.After)
@@ -249,7 +243,7 @@ func KeysAggregated(ctx context.Context, client *Client, tableName string, proje
 		Where(fmt.Sprintf("Day <= toStartOfDay(%s)", sb.Var(endDate)))
 
 	if query != nil && *query != "" {
-		sb.Where(fmt.Sprintf("Key LIKE %s", sb.Var("%"+*query+"%")))
+		sb.Where(fmt.Sprintf("Key ILIKE %s", sb.Var("%"+*query+"%")))
 	}
 
 	if typeArg != nil && *typeArg == modelInputs.KeyTypeNumeric {
@@ -363,8 +357,16 @@ func getChildValue(value reflect.Value, key string) (string, bool) {
 // clickhouse token - https://clickhouse.com/docs/en/sql-reference/functions/splitting-merging-functions#tokens
 var nonAlphaNumericChars = regexp.MustCompile(`[^\w:*]`)
 
-func matchFilter[TObj interface{}, TReservedKey ~string](row *TObj, config model.TableConfig[TReservedKey], filter *listener.FilterOperation) bool {
-	bodyFilter := config.BodyColumn != "" && filter.Column == "" && filter.Key == config.BodyColumn
+// strip toString() wrapper around filter keys to match the KeysToColumns map
+var keyWrapper = regexp.MustCompile(`toString\((\w+)\)`)
+
+func matchFilter[TObj interface{}, TReservedKey ~string](row *TObj, config model.TableConfig[TReservedKey], filter *listener.FilterOperation) (bool, error) {
+	key := filter.Key
+	groups := keyWrapper.FindStringSubmatch(key)
+	if len(groups) > 0 {
+		key = groups[1]
+	}
+	bodyFilter := config.BodyColumn != "" && filter.Column == "" && key == config.BodyColumn
 	v := reflect.ValueOf(*row)
 
 	rowBodyTerms := map[string]bool{}
@@ -375,40 +377,52 @@ func matchFilter[TObj interface{}, TReservedKey ~string](row *TObj, config model
 				rowBodyTerms[field] = true
 			}
 		}
-		for _, bodyFilter := range filter.Values {
-			if strings.Contains(bodyFilter, "%") {
-				pat, err := regexp.Compile(strings.ReplaceAll(regexp.QuoteMeta(bodyFilter), "%", ".*"))
-				// this may over match if the expression cannot be compiled,
-				// but we'd prefer to over match as this fn is used to determine sampling
+		for _, bf := range filter.Values {
+			if filter.Operator == listener.OperatorRegExp {
+				pat, err := regexp.Compile(bf)
 				if err == nil {
-					if !pat.MatchString(body) {
-						return false
+					matches := pat.MatchString(body)
+					shouldMatch := filter.Operator == listener.OperatorRegExp
+
+					if (shouldMatch && !matches) || (!shouldMatch && matches) {
+						return false, nil
 					}
 				}
-			} else if !rowBodyTerms[bodyFilter] {
-				return false
+			} else if strings.Contains(bf, "%") {
+				pat, err := regexp.Compile(strings.ReplaceAll(regexp.QuoteMeta(bf), "%", ".*"))
+				// this may over match if the expression cannot be compiled,
+				// but we'd prefer to over match as this fn is used to determine sampling
+				if err != nil {
+					return false, err
+				}
+				if !pat.MatchString(body) {
+					return false, nil
+				}
+			} else if !rowBodyTerms[bf] {
+				return false, nil
 			}
 		}
+		return true, nil
 	}
 
 	var rowValue string
-	if chKey, ok := config.KeysToColumns[TReservedKey(filter.Key)]; ok {
+	if chKey, ok := config.KeysToColumns[TReservedKey(key)]; ok {
 		if val, ok := getChildValue(v, chKey); ok {
 			rowValue = val
 		} else {
 			rowValue = repr(v.FieldByName(chKey))
 		}
-	} else if field := v.FieldByName(filter.Key); field.IsValid() {
+	} else if field := v.FieldByName(key); field.IsValid() {
 		rowValue = repr(field)
-	} else if val, ok := getChildValue(v, filter.Key); ok {
+	} else if val, ok := getChildValue(v, key); ok {
 		rowValue = val
 	} else if config.AttributesColumn != "" {
 		value := v.FieldByName(config.AttributesColumn)
 		if value.Kind() == reflect.Map {
-			rowValue = repr(value.MapIndex(reflect.ValueOf(filter.Key)))
+			rowValue = repr(value.MapIndex(reflect.ValueOf(key)))
 		} else if value.Kind() == reflect.Slice {
 			// assume that the key is a 'field' in `type_name` format
-			fieldParts := strings.SplitN(filter.Key, "_", 2)
+			fieldParts := strings.SplitN(key, "_", 2)
 			for i := 0; i < value.Len(); i++ {
 				fieldType := value.Index(i).Elem().FieldByName("Type").String()
 				name := value.Index(i).Elem().FieldByName("Name").String()
@@ -419,40 +433,48 @@ func matchFilter[TObj interface{}, TReservedKey ~string](row *TObj, config model
 			}
 		}
 	} else {
-		return true
+		return true, e.New(fmt.Sprintf("invalid filter %s", key))
 	}
-	if !bodyFilter {
-		for _, v := range filter.Values {
-			if strings.Contains(v, "%") {
-				if matched, _ := regexp.Match(strings.ReplaceAll(v, "%", ".*"), []byte(rowValue)); !matched {
-					return false
+	for _, v := range filter.Values {
+		if filter.Operator == listener.OperatorRegExp {
+			pat, err := regexp.Compile(v)
+			if err == nil {
+				matches := pat.MatchString(rowValue)
+				shouldMatch := filter.Operator == listener.OperatorRegExp
+
+				if (shouldMatch && !matches) || (!shouldMatch && matches) {
+					return false, nil
 				}
-			} else if filter.Operator == listener.OperatorNotEqual {
-				if rowValue == strings.Replace(v, "-", "", 1) {
-					return false
-				}
-			} else if v != rowValue {
-				return false
 			}
+		} else if strings.Contains(v, "%") {
+			if matched, _ := regexp.Match(strings.ReplaceAll(v, "%", ".*"), []byte(rowValue)); !matched {
+				return false, nil
+			}
+		} else if filter.Operator == listener.OperatorNotEqual {
+			if rowValue == strings.Replace(v, "-", "", 1) {
+				return false, nil
+			}
+		} else if v != rowValue {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
-func matchesQuery[TObj interface{}, TReservedKey ~string](row *TObj, config model.TableConfig[TReservedKey], filters listener.Filters) bool {
+func matchesQuery[TObj interface{}, TReservedKey ~string](row *TObj, config model.TableConfig[TReservedKey], filters listener.Filters, op listener.Operator) bool {
 	// if multiple filters are passed in, assume an AND operation between them
 	for _, filter := range filters {
 		switch filter.Operator {
 		case listener.OperatorAnd:
 			for _, childFilter := range filter.Filters {
-				if !matchesQuery(row, config, listener.Filters{childFilter}) {
+				if !matchesQuery(row, config, listener.Filters{childFilter}, filter.Operator) {
 					return false
 				}
 			}
 		case listener.OperatorOr:
 			var anyMatch bool
 			for _, childFilter := range filter.Filters {
-				if matchesQuery(row, config, listener.Filters{childFilter}) {
+				if matchesQuery(row, config, listener.Filters{childFilter}, filter.Operator) {
 					anyMatch = true
 					break
 				}
@@ -460,11 +482,20 @@ func matchesQuery[TObj interface{}, TReservedKey ~string](row *TObj, config mode
 			if !anyMatch {
 				return false
 			}
+		case listener.OperatorNot:
+			return !matchesQuery(row, config, listener.Filters{filter.Filters[0]}, filter.Operator)
 		default:
-			matches := matchFilter(row, config, filter)
-			if filter.Operator == listener.OperatorNot && matches {
-				return false
-			} else if !matches {
+			matches, err := matchFilter(row, config, filter)
+			if err != nil {
+				if op == listener.OperatorOr {
+					return false
+				} else if op == listener.OperatorNot {
+					return true
+				} else {
+					return true
+				}
+			}
+			if !matches {
 				return false
 			}
 		}
@@ -472,12 +503,20 @@ func matchesQuery[TObj interface{}, TReservedKey ~string](row *TObj, config mode
 	return true
 }
 
-func getFnStr(aggregator modelInputs.MetricAggregator, column string) string {
+func getFnStr(aggregator modelInputs.MetricAggregator, column string, useSampling bool) string {
 	switch aggregator {
 	case modelInputs.MetricAggregatorCount:
-		return "round(count() * any(_sample_factor))"
-	case modelInputs.MetricAggregatorCountDistinctKey:
-		return fmt.Sprintf("round(count(distinct %s) * any(_sample_factor))", column)
+		if useSampling {
+			return "round(count() * any(_sample_factor))"
+		} else {
+			return "round(count() * 1.0)"
+		}
+	case modelInputs.MetricAggregatorCountDistinctKey, modelInputs.MetricAggregatorCountDistinct:
+		if useSampling {
+			return fmt.Sprintf("round(count(distinct %s) * any(_sample_factor))", column)
+		} else {
+			return fmt.Sprintf("round(count(distinct %s) * 1.0)", column)
+		}
 	case modelInputs.MetricAggregatorMin:
 		return fmt.Sprintf("toFloat64(min(%s))", column)
 	case modelInputs.MetricAggregatorAvg:
@@ -493,12 +532,25 @@ func getFnStr(aggregator modelInputs.MetricAggregator, column string) string {
 	case modelInputs.MetricAggregatorMax:
 		return fmt.Sprintf("toFloat64(max(%s))", column)
 	case modelInputs.MetricAggregatorSum:
-		return fmt.Sprintf("sum(%s) * any(_sample_factor)", column)
+		if useSampling {
+			return fmt.Sprintf("sum(%s) * any(_sample_factor)", column)
+		} else {
+			return fmt.Sprintf("sum(%s) * 1.0", column)
+		}
 	}
 	return ""
 }
 
 func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfig sampleableTableConfig[T], projectID int, params modelInputs.QueryInput, column string, metricTypes []modelInputs.MetricAggregator, groupBy []string, bucketCount *int, bucketBy string, limit *int, limitAggregator *modelInputs.MetricAggregator, limitColumn *string) (*modelInputs.MetricsBuckets, error) {
+	return readWorkspaceMetrics(ctx, client, sampleableConfig, []int{projectID}, params, column, metricTypes, groupBy, bucketCount, bucketBy, limit, limitAggregator, limitColumn)
+}
+
+func readWorkspaceMetrics[T ~string](ctx context.Context, client *Client, sampleableConfig sampleableTableConfig[T], projectIDs []int, params modelInputs.QueryInput, column string, metricTypes []modelInputs.MetricAggregator, groupBy []string, bucketCount *int, bucketBy string, limit *int, limitAggregator *modelInputs.MetricAggregator, limitColumn *string) (*modelInputs.MetricsBuckets, error) {
+	span, ctx := util.StartSpanFromContext(ctx, "clickhouse.readMetrics")
+	span.SetAttribute("project_ids", projectIDs)
+	span.SetAttribute("table", sampleableConfig.tableConfig.TableName)
+	defer span.Finish()
+
 	if len(metricTypes) == 0 {
 		return nil, errors.New("no metric types provided")
 	}
@@ -516,8 +568,14 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 		nBuckets = 1
 	}
 
-	startTimestamp := int64(params.DateRange.StartDate.Unix())
-	endTimestamp := int64(params.DateRange.EndDate.Unix())
+	if params.DateRange == nil {
+		params.DateRange = &modelInputs.DateRangeRequiredInput{
+			StartDate: time.Now().Add(-time.Hour * 24 * 30),
+			EndDate:   time.Now(),
+		}
+	}
+	startTimestamp := params.DateRange.StartDate.Unix()
+	endTimestamp := params.DateRange.EndDate.Unix()
 	useSampling := sampleableConfig.useSampling(params.DateRange.EndDate.Sub(params.DateRange.StartDate))
 
 	keysToColumns := sampleableConfig.tableConfig.KeysToColumns
@@ -531,31 +589,38 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 	} else {
 		config = sampleableConfig.tableConfig
 	}
+	var isCountDistinct bool
 	for _, metricType := range metricTypes {
+		if metricType == modelInputs.MetricAggregatorCountDistinct {
+			isCountDistinct = true
+		}
 		if metricType == modelInputs.MetricAggregatorCountDistinctKey {
+			isCountDistinct = true
 			config.DefaultFilter = ""
 		}
 	}
 	fromSb, err = makeSelectBuilder(
 		config,
 		nil,
-		projectID,
+		projectIDs,
 		params,
 		Pagination{CountOnly: true},
-		OrderBackwardNatural,
-		OrderForwardNatural,
 	)
 
-	var metricExpr string
-	if col, found := keysToColumns[T(strings.ToLower(column))]; found {
-		metricExpr = fmt.Sprintf("toFloat64(%s)", col)
-	} else {
-		metricExpr = fmt.Sprintf("toFloat64OrNull(%s[%s])", attributesColumn, fromSb.Var(column))
+	var col string
+	if col = keysToColumns[T(strings.ToLower(column))]; col == "" {
+		col = fmt.Sprintf("%s[%s]", attributesColumn, fromSb.Var(column))
+	}
+	var metricExpr = col
+	if !isCountDistinct {
+		if reservedCol, found := keysToColumns[T(strings.ToLower(column))]; found {
+			metricExpr = fmt.Sprintf("toFloat64(%s)", reservedCol)
+		} else {
+			metricExpr = fmt.Sprintf("toFloat64OrNull(%s)", col)
+		}
 	}
 
 	switch column {
-	case string(modelInputs.MetricColumnMetricValue):
-		metricExpr = "toFloat64OrZero(Events.Attributes[1]['metric.value'])"
 	case "":
 		metricExpr = "1.0"
 	}
@@ -608,7 +673,7 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 	for idx, group := range groupBy {
 		groupCol := ""
 		if col, found := keysToColumns[T(group)]; found {
-			groupCol = col
+			groupCol = fmt.Sprintf("toString(%s)", col)
 		} else {
 			groupCol = fmt.Sprintf("toString(%s[%s])", attributesColumn, fromSb.Var(group))
 		}
@@ -649,7 +714,7 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 		innerSb.
 			From(config.TableName).
 			Select(strings.Join(colStrs, ", ")).
-			Where(innerSb.Equal("ProjectId", projectID)).
+			Where(innerSb.In("ProjectId", projectIDs)).
 			Where(innerSb.GreaterEqualThan("Timestamp", startTimestamp)).
 			Where(innerSb.LessEqualThan("Timestamp", endTimestamp))
 
@@ -665,7 +730,7 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 		} else {
 			col = fmt.Sprintf("toFloat64OrNull(%s[%s])", attributesColumn, innerSb.Var(col))
 		}
-		limitFn = getFnStr(*limitAggregator, col)
+		limitFn = getFnStr(*limitAggregator, col, false)
 
 		innerSb.GroupBy(groupByIndexes...).
 			OrderBy(limitFn).
@@ -690,7 +755,7 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 	fromSb = sqlbuilder.NewSelectBuilder()
 	outerSelect := []string{"bucket_index", "any(_sample_factor), any(min), any(max)"}
 	for _, metricType := range metricTypes {
-		outerSelect = append(outerSelect, getFnStr(metricType, "metric_value"))
+		outerSelect = append(outerSelect, getFnStr(metricType, "metric_value", true))
 	}
 	for idx := range groupBy {
 		outerSelect = append(outerSelect, fmt.Sprintf("g%d", idx))
@@ -708,11 +773,15 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 		Buckets: []*modelInputs.MetricBucket{},
 	}
 
+	span, ctx = util.StartSpanFromContext(ctx, "readMetrics.query")
+	span.SetAttribute("sql", sql)
+	span.SetAttribute("args", args)
 	rows, err := client.conn.Query(
 		ctx,
 		sql,
 		args...,
 	)
+	span.Finish(err)
 
 	if err != nil {
 		return nil, err
@@ -727,16 +796,16 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 
 	groupByColResults := make([]string, len(groupBy))
 	metricResults := make([]*float64, len(metricTypes))
-	scanResults := make([]interface{}, 4+len(groupByColResults)+len(metricResults))
-	scanResults[0] = &groupKey
-	scanResults[1] = &sampleFactor
-	scanResults[2] = &min
-	scanResults[3] = &max
+	scanResults := []interface{}{}
+	scanResults = append(scanResults, &groupKey)
+	scanResults = append(scanResults, &sampleFactor)
+	scanResults = append(scanResults, &min)
+	scanResults = append(scanResults, &max)
 	for idx := range metricTypes {
-		scanResults[4+idx] = &metricResults[idx]
+		scanResults = append(scanResults, &metricResults[idx])
 	}
 	for idx := range groupByColResults {
-		scanResults[4+len(metricTypes)+idx] = &groupByColResults[idx]
+		scanResults = append(scanResults, &groupByColResults[idx])
 	}
 
 	lastBucketId := -1
@@ -799,6 +868,76 @@ func readMetrics[T ~string](ctx context.Context, client *Client, sampleableConfi
 	return metrics, err
 }
 
+func formatColumn(input string, column string) string {
+	base := input
+	if base == "" {
+		base = "null"
+	}
+	return fmt.Sprintf("%s AS %s", base, column)
+}
+
+func logLines[T ~string](ctx context.Context, client *Client, tableConfig model.TableConfig[T], projectID int, params modelInputs.QueryInput) ([]*modelInputs.LogLine, error) {
+	body := formatColumn(tableConfig.BodyColumn, "Body")
+	severity := formatColumn(tableConfig.SeverityColumn, "Severity")
+	attributes := formatColumn(tableConfig.AttributesColumn, "Labels")
+	fromSb, err := makeSelectBuilder(
+		tableConfig,
+		[]string{"Timestamp", body, severity, attributes},
+		[]int{projectID},
+		params,
+		Pagination{CountOnly: true},
+	)
+	if err != nil {
+		return nil, err
+	}
+	fromSb.Limit(1000)
+
+	sql, args := fromSb.BuildWithFlavor(sqlbuilder.ClickHouse)
+
+	logLines := []*modelInputs.LogLine{}
+
+	rows, err := client.conn.Query(
+		ctx,
+		sql,
+		args...,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for rows.Next() {
+		var result struct {
+			Timestamp time.Time
+			Body      string
+			Severity  string
+			Labels    map[string]string
+		}
+		if err := rows.ScanStruct(&result); err != nil {
+			return nil, err
+		}
+
+		labelsJson, err := json.Marshal(expandJSON(result.Labels))
+		if err != nil {
+			return nil, err
+		}
+
+		var severity *modelInputs.LogLevel
+		if result.Severity != "" {
+			logLevel := makeLogLevel(result.Severity)
+			severity = &logLevel
+		}
+		logLines = append(logLines, &modelInputs.LogLine{
+			Timestamp: result.Timestamp,
+			Body:      result.Body,
+			Severity:  severity,
+			Labels:    string(labelsJson),
+		})
+	}
+
+	return logLines, err
+}
+
 func repr(val reflect.Value) string {
 	switch val.Kind() {
 	case reflect.Pointer:
@@ -808,4 +947,37 @@ func repr(val reflect.Value) string {
 	default:
 		return val.String()
 	}
+}
+
+func getSortOrders[TReservedKey ~string](
+	sb *sqlbuilder.SelectBuilder,
+	paginationDirection modelInputs.SortDirection,
+	config model.TableConfig[TReservedKey],
+	params modelInputs.QueryInput,
+) (string, string) {
+	sortColumn := "timestamp"
+	sortDirection := modelInputs.SortDirectionDesc
+	if params.Sort != nil {
+		sortColumn = params.Sort.Column
+		sortDirection = params.Sort.Direction
+	}
+
+	if col, found := config.KeysToColumns[TReservedKey(sortColumn)]; found {
+		sortColumn = col
+	} else {
+		sortColumn = fmt.Sprintf("%s[%s]", config.AttributesColumn, sb.Var(sortColumn))
+	}
+
+	forwardDirection := "DESC"
+	backwardDirection := "ASC"
+	if paginationDirection == modelInputs.SortDirectionAsc || sortDirection == modelInputs.SortDirectionAsc {
+		forwardDirection = "ASC"
+	} else {
+		backwardDirection = "DESC"
+	}
+
+	orderForward := fmt.Sprintf("%s %s, UUID %s", sortColumn, forwardDirection, forwardDirection)
+	orderBackward := fmt.Sprintf("%s %s, UUID %s", sortColumn, backwardDirection, backwardDirection)
+
+	return orderForward, orderBackward
 }

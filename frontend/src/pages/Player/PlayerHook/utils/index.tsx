@@ -1,15 +1,16 @@
 import { useGetErrorObjectQuery } from '@graph/hooks'
 import { ErrorObject, Session, SessionComment } from '@graph/schemas'
-import { EventType, Replayer } from '@highlight-run/rrweb'
-import { playerMetaData, SessionInterval } from '@highlight-run/rrweb-types'
 import { mui4Synder } from '@pages/Player/PlayerHook/utils/mui'
+import { playerMetaData, SessionInterval } from '@rrweb/types'
 import { clamp } from '@util/numbers'
 import { MillisToMinutesAndSeconds } from '@util/time'
 import { message } from 'antd'
 import moment from 'moment'
 import { useCallback, useState } from 'react'
-import { useLocation } from 'react-router-dom'
-import { NavigateFunction } from 'react-router-dom'
+import { NavigateFunction, useLocation } from 'react-router-dom'
+import { EventType, Replayer } from 'rrweb'
+
+import { useRelatedResource } from '@/components/RelatedResources/hooks'
 
 import { HighlightEvent } from '../../HighlightEvent'
 import {
@@ -147,6 +148,8 @@ export enum PlayerSearchParameters {
 	commentId = 'commentId',
 	/** Whether to mark the comment thread as muted.*/
 	muted = 'muted',
+	/** Whether to show the search side panel. Shown by default. */
+	search = 'search',
 }
 
 export const useLinkErrorInstance = () => {
@@ -168,10 +171,25 @@ export const useLinkErrorInstance = () => {
 
 export const useLinkLogCursor = () => {
 	const location = useLocation()
+	const { resource } = useRelatedResource()
 	const searchParams = new URLSearchParams(location.search)
-	const logCursor = searchParams.get(PlayerSearchParameters.log)
+	const logCursor =
+		resource?.type === 'session'
+			? resource.log ?? null
+			: searchParams.get(PlayerSearchParameters.log)
+
 	return {
 		logCursor,
+	}
+}
+
+export const useShowSearchParam = () => {
+	const location = useLocation()
+	const searchParams = new URLSearchParams(location.search)
+	const searchParam = searchParams.get(PlayerSearchParameters.search)
+
+	return {
+		showSearch: searchParam !== 'false',
 	}
 }
 

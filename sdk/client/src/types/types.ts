@@ -5,6 +5,7 @@ import {
 	NetworkRecordingOptions,
 	SessionShortcutOptions,
 } from './client.js'
+import { ErrorMessageType } from './shared-types'
 
 export declare interface Metadata {
 	[key: string]: string | boolean | number
@@ -66,11 +67,6 @@ export declare type HighlightOptions = {
 	 * @private
 	 */
 	debug?: boolean | DebugOptions
-	/**
-	 * Do not use this.
-	 * @private
-	 */
-	scriptUrl?: string
 	/**
 	 * Specifies where to send Highlight session data.
 	 * You should not have to set this unless you are running an on-premise instance.
@@ -167,6 +163,12 @@ export declare type HighlightOptions = {
 	 */
 	enablePerformanceRecording?: boolean
 	/**
+	 * Specifies whether window.Promise should be patched
+	 * to record the stack trace of promise rejections.
+	 * @default true
+	 */
+	enablePromisePatch?: boolean
+	/**
 	 * Configure the recording sampling options, eg. how frequently we record canvas updates.
 	 */
 	samplingStrategy?: SamplingStrategy
@@ -183,8 +185,7 @@ export declare type HighlightOptions = {
 	 * This means that stylesheets that are local to the client (eg. client-generated blob: urls)
 	 * will be serialized into the recording and will be valid on replay.
 	 * Only enable this if you are running into issues with client-local stylesheets.
-	 * May significantly decrease recording performance.
-	 * @default false
+	 * @default true
 	 */
 	inlineStylesheet?: boolean
 	/**
@@ -258,6 +259,20 @@ export declare interface HighlightPublicInterface {
 		message?: string,
 		payload?: { [key: string]: string },
 	) => void
+	/**
+	 * Calling this method will report an error in Highlight
+	 * while allowing additional attributes to be sent over as metadata.
+	 * @see {consumeError} for more information.
+	 */
+	consume: (
+		error: Error,
+		opts: {
+			message?: string
+			payload?: object
+			source?: string
+			type?: ErrorMessageType
+		},
+	) => void
 	getSessionURL: () => Promise<string>
 	getSessionDetails: () => Promise<SessionDetails>
 	start: (options?: StartOptions) => void
@@ -267,6 +282,7 @@ export declare interface HighlightPublicInterface {
 		func: () => void | Promise<void>,
 		options?: OnHighlightReadyOptions,
 	) => Promise<void>
+	getRecordingState: () => 'NotRecording' | 'Recording'
 	options: HighlightOptions | undefined
 	/**
 	 * Calling this will add a feedback comment to the session.

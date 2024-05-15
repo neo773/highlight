@@ -16,7 +16,7 @@ top_col_expr
 col_expr
   : LPAREN col_expr RPAREN # col_paren_expr
   | negation_op col_expr # negated_col_expr
-  | col_expr and_op col_expr # and_col_expr
+  | col_expr AND col_expr # and_col_expr
   | col_expr OR col_expr # or_col_expr
   | search_value # col_search_value
   ;
@@ -47,7 +47,7 @@ implicit_and_op
 or_op
   : OR
   ;
-  
+
 exists_op
   : EXISTS
   | NOT EXISTS
@@ -90,9 +90,9 @@ LPAREN : '(' ;
 RPAREN : ')' ;
 COLON : ':' ;
 ID : [A-Z_0-9.\-*]+ ;
-STRING : '"' .*? '"' ;
+STRING : ('"' ( '\\"' | ~["] )* '"' | '\'' ( '\\\'' | ~['] )* '\'') | '`' ( '\\`' | ~[`] )* '`' ;
 VALUE: ~[ \t\n\r\f=><:!)(]+ ;
-WS : [ \t\n\r\f]+ -> skip ;
+WS : [ \t\n\r\f]+ -> channel(HIDDEN) ;
 
 // Handle characters which failed to match any other token. This ensures all
 // characters are tokenized.

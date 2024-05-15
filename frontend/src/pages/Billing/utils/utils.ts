@@ -3,10 +3,13 @@ import moment from 'moment'
 import { GetBillingDetailsForProjectQuery } from '@/graph/generated/operations'
 
 import {
+	BillingDetails,
 	Maybe,
+	Plan,
 	PlanType,
 	ProductType,
 	RetentionPeriod,
+	Workspace,
 } from '../../../graph/generated/schemas'
 
 /**
@@ -66,41 +69,100 @@ export const RETENTION_PERIOD_LABELS: { [K in RetentionPeriod]: string } = {
 	[RetentionPeriod.ThreeYears]: '3 year retention',
 }
 
-export const getMeterAmounts = (
-	data: GetBillingDetailsForProjectQuery,
-): { [K in ProductType]: [number, number | undefined] } => {
-	const sessionsMeter = data.billingDetailsForProject?.meter ?? 0
-	const sessionsQuota = data.billingDetailsForProject?.sessionsBillingLimit
-		? data.billingDetailsForProject.plan.sessionsLimit +
-		  (data.billingDetailsForProject.sessionsBillingLimit ?? 0)
-		: undefined
-	const errorsMeter = data.billingDetailsForProject?.errorsMeter ?? 0
-	const errorsQuota = data.billingDetailsForProject?.errorsBillingLimit
-		? data.billingDetailsForProject.plan.errorsLimit +
-		  (data.billingDetailsForProject.errorsBillingLimit ?? 0)
-		: undefined
-	const logsMeter = data.billingDetailsForProject?.logsMeter ?? 0
-	const logsQuota = data.billingDetailsForProject?.logsBillingLimit
-		? data.billingDetailsForProject.plan.logsLimit +
-		  (data.billingDetailsForProject.logsBillingLimit ?? 0)
-		: undefined
-	const tracesMeter = data.billingDetailsForProject?.tracesMeter ?? 0
-	const tracesQuota = data.billingDetailsForProject?.tracesBillingLimit
-		? data.billingDetailsForProject.plan.tracesLimit +
-		  (data.billingDetailsForProject.tracesBillingLimit ?? 0)
-		: undefined
+type meterArgs = {
+	workspace: Maybe<Pick<Workspace, 'trial_end_date'>> | undefined
+	details:
+		| Maybe<
+				{ __typename?: 'BillingDetails' } & Pick<
+					BillingDetails,
+					| 'meter'
+					| 'membersMeter'
+					| 'errorsMeter'
+					| 'logsMeter'
+					| 'tracesMeter'
+					| 'sessionsBillingLimit'
+					| 'errorsBillingLimit'
+					| 'logsBillingLimit'
+					| 'tracesBillingLimit'
+				> & {
+						plan: { __typename?: 'Plan' } & Pick<
+							Plan,
+							| 'type'
+							| 'interval'
+							| 'membersLimit'
+							| 'sessionsLimit'
+							| 'errorsLimit'
+							| 'logsLimit'
+							| 'tracesLimit'
+							| 'sessionsRate'
+							| 'errorsRate'
+							| 'logsRate'
+							| 'tracesRate'
+						>
+					}
+		  >
+		| undefined
+		| null
+}
+
+export const getMeterAmounts = ({
+	details,
+	workspace,
+}: meterArgs): { [K in ProductType]: [number, number | undefined] } => {
+	if (!details) {
+		return {
+			[ProductType.Sessions]: [0, undefined],
+			[ProductType.Errors]: [0, undefined],
+			[ProductType.Logs]: [0, undefined],
+			[ProductType.Traces]: [0, undefined],
+			[ProductType.Metrics]: [0, undefined],
+		}
+	}
+	const trialActive = workspace?.trial_end_date
+		? moment(workspace?.trial_end_date).isAfter(moment())
+		: false
+	const canChargeOverage = trialActive || details.plan.type !== 'Free'
+	const sessionsMeter = details?.meter ?? 0
+	const sessionsQuota = canChargeOverage
+		? details?.sessionsBillingLimit
+			? details.sessionsBillingLimit
+			: undefined
+		: details?.plan.sessionsLimit
+	const errorsMeter = details?.errorsMeter ?? 0
+	const errorsQuota = canChargeOverage
+		? details?.errorsBillingLimit
+			? details.errorsBillingLimit
+			: undefined
+		: details?.plan.errorsLimit
+	const logsMeter = details?.logsMeter ?? 0
+	const logsQuota = canChargeOverage
+		? details?.logsBillingLimit
+			? details.logsBillingLimit
+			: undefined
+		: details?.plan.logsLimit
+	const tracesMeter = details?.tracesMeter ?? 0
+	const tracesQuota = canChargeOverage
+		? details?.tracesBillingLimit
+			? details.tracesBillingLimit
+			: undefined
+		: details?.plan.tracesLimit
 	return {
 		[ProductType.Sessions]: [sessionsMeter, sessionsQuota],
 		[ProductType.Errors]: [errorsMeter, errorsQuota],
 		[ProductType.Logs]: [logsMeter, logsQuota],
 		[ProductType.Traces]: [tracesMeter, tracesQuota],
+		// TODO(vkorolik) billing for metrics ingest
+		[ProductType.Metrics]: [0, undefined],
 	}
 }
 
 export const getQuotaPercents = (
 	data: GetBillingDetailsForProjectQuery,
 ): [ProductType, number][] => {
-	const amts = getMeterAmounts(data)
+	const amts = getMeterAmounts({
+		workspace: data.workspace_for_project,
+		details: data.billingDetailsForProject,
+	})
 	const sessionAmts = amts[ProductType.Sessions]
 	const errorAmts = amts[ProductType.Errors]
 	const logAmts = amts[ProductType.Logs]
